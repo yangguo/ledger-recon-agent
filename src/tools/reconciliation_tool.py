@@ -693,8 +693,9 @@ def run_reconciliation(
             else:
                 differences.append(item)
         
-        # 凭证借贷平衡检查
+        # 凭证借贷平衡检查（限制问题数量避免响应过大）
         voucher_issues: list = []
+        MAX_VOUCHER_ISSUES = 10  # 限制最多显示10个凭证问题
         
         if check_voucher_balance and je_vouchers:
             print("执行凭证借贷平衡检查...")
@@ -714,6 +715,9 @@ def run_reconciliation(
             }).reset_index()
             
             for _, row in grouped.iterrows():
+                if len(voucher_issues) >= MAX_VOUCHER_ISSUES:
+                    break  # 达到上限后停止收集
+                    
                 debit_sum = float(row['借方金额'])
                 credit_sum = float(row['贷方金额'])
                 
@@ -740,7 +744,9 @@ def run_reconciliation(
                         '差异': round(debit_sum - credit_sum, 2)
                     })
             
-            print(f"  发现 {len(voucher_issues)} 个借贷不平衡凭证")
+            # 计算实际检查的凭证数（不计入已跳过的）
+            total_vouchers_checked = len(grouped)
+            print(f"  检查 {total_vouchers_checked} 张凭证，发现 {len(voucher_issues)} 个借贷不平衡问题（最多显示{MAX_VOUCHER_ISSUES}个）")
         
         # 构建结果
         result = {
