@@ -108,6 +108,38 @@ def _build_header_to_idx(headers: List[str]) -> Dict[str, int]:
     return header_to_idx
 
 
+def _is_balance_sheet_group_header(headers: List[str]) -> bool:
+    """识别“发生额及余额表”常见双层表头的第一层。"""
+    header_text = "|".join(str(h).strip() for h in headers if h is not None)
+    return (
+        "会计科目末级" in header_text
+        and "借方" in header_text
+        and "贷方" in header_text
+        and "期末余额" in header_text
+    )
+
+
+def _map_balance_sheet_row(row: Tuple[Any, ...]) -> Dict[str, Any]:
+    """映射“发生额及余额表”双层表头的数据行。
+
+    常见列布局：
+    A=科目编码, B=科目名称, N=本期借方本币, R=本期贷方本币。
+    该格式中 row 7 是分组表头，row 8 是子表头，存在多个“本币”，不能用普通列名映射。
+    """
+    def cell(idx: int) -> Any:
+        return row[idx] if idx < len(row) else None
+
+    row_dict = {
+        '科目编码': cell(0),
+        '科目名称': cell(1),
+        '借方金额': cell(13),  # N列：借方/本币
+        '贷方金额': cell(17),  # R列：贷方/本币
+    }
+    if row_dict['科目编码'] is not None and row_dict['科目名称'] is not None:
+        row_dict['科目'] = f"{row_dict['科目编码']} {row_dict['科目名称']}"
+    return row_dict if _row_has_value(row_dict) else {}
+
+
 def _first_existing(header_to_idx: Dict[str, int], candidates: List[str]) -> Optional[str]:
     """从候选列名中找到第一个存在于表头的列。"""
     for c in candidates:
@@ -240,17 +272,22 @@ def _select_excel_sheet_and_header_row(file_path: str, prefer_sheet_keywords: Op
                 score = 0
                 if any(x in header_set for x in ['账套', '公司', '工厂', '核算账套名称', '主体账套']):
                     score += 5
-                if any(x in header_set for x in ['科目', '会计科目', '科目编码', '会计科目末级编码', '行标签']):
+                if any(x in header_set for x in ['科目', '会计科目', '科目编码', '会计科目末级', '会计科目末级编码', '行标签', '编码', '名称']):
                     score += 8
-                if any(x in header_set for x in ['借贷方本位币', '借贷方本位币金额', '借方金额(本位币)', '求和项:借贷方金额(本位币)', '借方金额']):
+                if any(x in header_set for x in ['借贷方本位币', '借贷方本位币金额', '借方金额(本位币)', '求和项:借贷方金额(本位币)', '借方金额', '借方']):
                     score += 6
-                if any(x in header_set for x in ['贷方本位币', '贷方本位币金额', '贷方金额(本位币)', '求和项:贷方金额(本位币)', '贷方金额']):
+                if any(x in header_set for x in ['贷方本位币', '贷方本位币金额', '贷方金额(本位币)', '求和项:贷方金额(本位币)', '贷方金额', '贷方']):
                     score += 6
+                if any(x in header_set for x in ['期初余额', '期末余额']):
+                    score += 3
+                if _is_balance_sheet_group_header(headers):
+                    score += 20
                 if any(x in header_set for x in ['期间', '月', '月份', '会计期间']):
                     score += 2
                 if any(x in header_set for x in ['凭证号', '凭证编号', '凭证', '记账凭证号']):
                     score += 2
-                key = (score + prefer, score, prefer, name, r)
+                # 同分时优先更靠前的表头行，避免把数据行误判为表头。
+                key = (score + prefer, score, prefer, name, -r)
                 if best is None or key > best:
                     best = key
         wb.close()
@@ -313,9 +350,18 @@ def _load_excel_in_chunks(file_path: str, file_type: str = 'je', chunk_size: int
             headers = [str(v).strip() if v is not None else '' for v in header_row]
             header_to_idx = _build_header_to_idx(headers)
             data_rows: List[Dict[str, Any]] = []
+            balance_sheet_format = file_type == 'tb' and _is_balance_sheet_group_header(headers)
+
+            if balance_sheet_format:
+                # 跳过第二层子表头（编码/名称/原币/本币...）。该格式重复列名多，
+                # 需按固定位置提取本期借方/贷方本币。
+                try:
+                    next(row_iter)
+                except StopIteration:
+                    return
 
             for row in row_iter:
-                row_dict = _map_row_to_standard_columns(row, header_to_idx, file_type)
+                row_dict = _map_balance_sheet_row(row) if balance_sheet_format else _map_row_to_standard_columns(row, header_to_idx, file_type)
                 if not row_dict:
                     continue
                 data_rows.append(row_dict)
