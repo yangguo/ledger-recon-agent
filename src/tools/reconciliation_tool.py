@@ -8,6 +8,7 @@ import numpy as np
 import json
 import re
 import os
+import tempfile
 from typing import List, Dict, Optional, Tuple, Any, Iterator, Generator
 from langchain.tools import tool
 from coze_coding_utils.log.write_log import request_context
@@ -19,6 +20,31 @@ DEFAULT_THRESHOLD = 0.01
 DEFAULT_BATCH_SIZE = 10000
 # 内存警告阈值（MB）
 MEMORY_WARNING_THRESHOLD = 500
+
+
+JE_COLUMNS = {
+    "book": ["账套", "公司", "工厂"],
+    "voucher": ["凭证号", "凭证编号", "凭证", "记账凭证号"],
+    "year": ["年", "年度"],
+    "month": ["月", "月份"],
+    "period": ["期间", "会计期间", "期间代码"],
+    "subject": ["科目", "会计科目", "科目编码", "科目代码"],
+    "account_code": ["科目编码", "总账科目"],
+    "account_name": ["科目名称", "科目全称"],
+    "debit": ["借方本位币", "借方本位币金额", "借方金额(本位币)", "求和项:借贷方金额(本位币)", "借方金额", "借贷方本位币"],
+    "credit": ["贷方本位币", "贷方本位币金额", "贷方金额(本位币)", "求和项:借贷方金额(本位币)", "贷方金额"],
+    "description": ["摘要", "说明", "描述"],
+    "reversal": ["红字", "红冲", "冲销", "反方向"],
+}
+
+TB_COLUMNS = {
+    "book": ["核算账套名称", "主体账套", "账套", "公司"],
+    "account_code": ["科目编码", "总账科目", "科目"],
+    "account_name": ["科目名称", "科目全称", "名称"],
+    "subject": ["科目", "会计科目", "科目编码", "科目代码"],
+    "debit": ["本期借方.1", "本期借方发生.1", "本期借方", "借方累计.1", "借方累计", "本期借方发生_1", "借贷方本位币"],
+    "credit": ["本期贷方.1", "本期贷方发生.1", "本期贷方", "贷方累计.1", "贷方累计", "本期贷方发生_1", "贷方本位币"],
+}
 
 
 def parse_currency_value(x: Any) -> float:
@@ -80,6 +106,99 @@ def _build_header_to_idx(headers: List[str]) -> Dict[str, int]:
     return header_to_idx
 
 
+def _first_existing(header_to_idx: Dict[str, int], candidates: List[str]) -> Optional[str]:
+    """从候选列名中找到第一个存在于表头的列。"""
+    for c in candidates:
+        if c and c in header_to_idx:
+            return c
+    return None
+
+
+def _row_has_value(row_dict: Dict[str, Any]) -> bool:
+    """过滤完全空白的数据行。"""
+    for value in row_dict.values():
+        if value is not None and str(value).strip() != "":
+            return True
+    return False
+
+
+def _map_row_to_standard_columns(row: Tuple[Any, ...], header_to_idx: Dict[str, int], file_type: str) -> Dict[str, Any]:
+    """将一行原始 Excel 数据映射成工具内部使用的标准中文列名。"""
+    columns = TB_COLUMNS if file_type == 'tb' else JE_COLUMNS
+    row_dict: Dict[str, Any] = {}
+
+    def get_value(col_name: Optional[str]) -> Any:
+        if not col_name or col_name not in header_to_idx:
+            return None
+        idx = header_to_idx[col_name]
+        return row[idx] if idx < len(row) else None
+
+    book_col = _first_existing(header_to_idx, columns.get("book", []))
+    voucher_col = _first_existing(header_to_idx, columns.get("voucher", []))
+    year_col = _first_existing(header_to_idx, columns.get("year", []))
+    month_col = _first_existing(header_to_idx, columns.get("month", []))
+    period_col = _first_existing(header_to_idx, columns.get("period", []))
+    subject_col = _first_existing(header_to_idx, columns.get("subject", []))
+    account_code_col = _first_existing(header_to_idx, columns.get("account_code", []))
+    account_name_col = _first_existing(header_to_idx, columns.get("account_name", []))
+    debit_col = _first_existing(header_to_idx, columns.get("debit", []))
+    credit_col = _first_existing(header_to_idx, columns.get("credit", []))
+    description_col = _first_existing(header_to_idx, columns.get("description", []))
+    reversal_col = _first_existing(header_to_idx, columns.get("reversal", []))
+
+    if book_col:
+        row_dict['账套'] = get_value(book_col)
+    if voucher_col:
+        row_dict['凭证号'] = get_value(voucher_col)
+    if year_col:
+        row_dict['年'] = get_value(year_col)
+    if month_col:
+        row_dict['月'] = get_value(month_col)
+    if period_col:
+        row_dict['期间'] = get_value(period_col)
+    if subject_col:
+        row_dict['科目'] = get_value(subject_col)
+    if account_code_col:
+        row_dict['科目编码'] = get_value(account_code_col)
+    if account_name_col:
+        row_dict['科目名称'] = get_value(account_name_col)
+    if debit_col:
+        row_dict['借方金额'] = get_value(debit_col)
+    if credit_col:
+        row_dict['贷方金额'] = get_value(credit_col)
+    if description_col:
+        row_dict['摘要'] = get_value(description_col)
+    if reversal_col:
+        row_dict['红字'] = get_value(reversal_col)
+
+    return row_dict if _row_has_value(row_dict) else {}
+
+
+def _read_csv_in_chunks(file_path: str, chunk_size: Optional[int] = None) -> Iterator[pd.DataFrame]:
+    """读取 CSV，优先 utf-8，失败后回退到 gbk。"""
+    read_kwargs = {"on_bad_lines": "skip"}
+    if chunk_size:
+        read_kwargs["chunksize"] = chunk_size
+
+    last_error: Optional[Exception] = None
+    for encoding in ("utf-8", "gbk"):
+        try:
+            chunks = pd.read_csv(file_path, encoding=encoding, **read_kwargs)
+            if isinstance(chunks, pd.DataFrame):
+                chunks.columns = [str(c).strip() for c in chunks.columns]
+                yield chunks
+            else:
+                for chunk in chunks:
+                    chunk.columns = [str(c).strip() for c in chunk.columns]
+                    yield chunk
+            return
+        except UnicodeDecodeError as e:
+            last_error = e
+            continue
+    if last_error:
+        raise last_error
+
+
 def _select_excel_sheet_and_header_row(file_path: str, prefer_sheet_keywords: Optional[List[str]] = None) -> Tuple[Optional[str], int]:
     """智能选择Excel工作表和表头行"""
     prefer_sheet_keywords = prefer_sheet_keywords or []
@@ -125,121 +244,15 @@ def _select_excel_sheet_and_header_row(file_path: str, prefer_sheet_keywords: Op
 
 
 def _load_excel_file(file_path: str, file_type: str = 'je', target_patterns: Optional[List[str]] = None) -> pd.DataFrame:
-    """加载Excel文件"""
-    target_patterns = target_patterns or []
-    ext = os.path.splitext(str(file_path))[1].lower()
-    
-    # 列名候选映射
-    je_columns = {
-        "book": ["账套", "公司", "工厂"],
-        "voucher": ["凭证号", "凭证编号", "凭证", "记账凭证号"],
-        "year": ["年", "年度"],
-        "month": ["月", "月份"],
-        "subject": ["科目", "会计科目", "科目编码", "科目代码"],
-        "debit": ["借方本位币", "借方本位币金额", "借方金额(本位币)", "求和项:借贷方金额(本位币)", "借方金额", "借贷方本位币"],
-        "credit": ["贷方本位币", "贷方本位币金额", "贷方金额(本位币)", "求和项:贷方金额(本位币)", "贷方金额"],
-        "description": ["摘要", "说明", "描述"],
-        "reversal": ["红字", "红冲", "冲销", "反方向"]
-    }
-    
-    tb_columns = {
-        "book": ["核算账套名称", "主体账套", "账套", "公司"],
-        "account_code": ["科目编码", "总账科目", "科目"],
-        "account_name": ["科目名称", "科目全称", "名称"],
-        "debit": ["本期借方.1", "本期借方发生.1", "本期借方", "借方累计.1", "借方累计", "本期借方发生_1", "借贷方本位币"],
-        "credit": ["本期贷方.1", "本期贷方发生.1", "本期贷方", "贷方累计.1", "贷方累计", "本期贷方发生_1", "贷方本位币"]
-    }
-    
-    columns = tb_columns if file_type == 'tb' else je_columns
-    configured_book = columns.get("book", ["账套"])[0]
-    configured_subject = columns.get("subject", ["科目"])[0]
-    configured_account_code = columns.get("account_code", ["科目编码"])[0]
-    configured_debit = columns.get("debit", ["借方本位币"])[0]
-    configured_credit = columns.get("credit", ["贷方本位币"])[0]
-    
-    if ext in {'.xlsx', '.xlsm'}:
-        from openpyxl import load_workbook
-        wb = load_workbook(file_path, read_only=True, data_only=True)
-        sheet_name, header_row_idx = _select_excel_sheet_and_header_row(
-            file_path, 
-            prefer_sheet_keywords=['凭证', '序时', '分录'] if file_type == 'je' else ['余额', '科目']
-        )
-        ws = wb[sheet_name] if sheet_name in wb.sheetnames else wb.active
-        
-        all_rows = []
-        for row in ws.iter_rows(min_row=header_row_idx, values_only=True):
-            all_rows.append(row)
-        
-        wb.close()
-        
-        if not all_rows:
-            return pd.DataFrame()
-        
-        headers = [str(v).strip() if v is not None else '' for v in all_rows[0]]
-        header_to_idx = _build_header_to_idx(headers)
-        
-        def first_existing(candidates):
-            for c in candidates:
-                if c and c in header_to_idx:
-                    return c
-            return None
-        
-        book_col = first_existing(columns.get("book", []))
-        voucher_col = first_existing(["凭证号", "凭证编号", "凭证", "记账凭证号"])
-        year_col = first_existing(["年", "年度"])
-        month_col = first_existing(["月", "月份"])
-        period_col = first_existing(["期间", "会计期间", "期间代码"])
-        subject_col = first_existing(columns.get("subject", ["科目", "会计科目"]))
-        account_code_col = first_existing(columns.get("account_code", ["科目编码", "总账科目"]))
-        account_name_col = first_existing(columns.get("account_name", ["科目名称", "科目全称"]))
-        debit_col = first_existing(columns.get("debit", ["借方本位币", "借方金额"]))
-        credit_col = first_existing(columns.get("credit", ["贷方本位币", "贷方金额"]))
-        description_col = first_existing(["摘要", "说明", "描述"])
-        reversal_col = first_existing(["红字", "红冲", "冲销", "反方向"])
-        
-        data_rows = []
-        for row in all_rows[1:]:
-            row_dict = {}
-            if book_col and book_col in header_to_idx:
-                row_dict['账套'] = row[header_to_idx[book_col]]
-            if voucher_col and voucher_col in header_to_idx:
-                row_dict['凭证号'] = row[header_to_idx[voucher_col]]
-            if year_col and year_col in header_to_idx:
-                row_dict['年'] = row[header_to_idx[year_col]]
-            if month_col and month_col in header_to_idx:
-                row_dict['月'] = row[header_to_idx[month_col]]
-            if period_col and period_col in header_to_idx:
-                row_dict['期间'] = row[header_to_idx[period_col]]
-            if subject_col and subject_col in header_to_idx:
-                row_dict['科目'] = row[header_to_idx[subject_col]]
-            if account_code_col and account_code_col in header_to_idx:
-                row_dict['科目编码'] = row[header_to_idx[account_code_col]]
-            if account_name_col and account_name_col in header_to_idx:
-                row_dict['科目名称'] = row[header_to_idx[account_name_col]]
-            if debit_col and debit_col in header_to_idx:
-                row_dict['借方金额'] = row[header_to_idx[debit_col]]
-            if credit_col and credit_col in header_to_idx:
-                row_dict['贷方金额'] = row[header_to_idx[credit_col]]
-            if description_col and description_col in header_to_idx:
-                row_dict['摘要'] = row[header_to_idx[description_col]]
-            if reversal_col and reversal_col in header_to_idx:
-                row_dict['红字'] = row[header_to_idx[reversal_col]]
-            
-            if row_dict:
-                data_rows.append(row_dict)
-        
-        return pd.DataFrame(data_rows)
-    
-    elif ext == '.csv':
-        try:
-            df = pd.read_csv(file_path, encoding='utf-8')
-        except UnicodeDecodeError:
-            df = pd.read_csv(file_path, encoding='gbk')
-        
-        df.columns = [str(c).strip() for c in df.columns]
-        return df
-    
-    return pd.DataFrame()
+    """加载完整文件。
+
+    注意：对账主流程应优先使用 ``_load_excel_in_chunks``。该函数保留给 TB 小表、
+    兼容旧调用和单独加载工具使用。
+    """
+    chunks = list(_load_excel_in_chunks(file_path, file_type=file_type, chunk_size=DEFAULT_BATCH_SIZE))
+    if not chunks:
+        return pd.DataFrame()
+    return pd.concat(chunks, ignore_index=True)
 
 
 def _load_excel_in_chunks(file_path: str, file_type: str = 'je', chunk_size: int = DEFAULT_BATCH_SIZE) -> Generator[pd.DataFrame, None, None]:
@@ -257,21 +270,46 @@ def _load_excel_in_chunks(file_path: str, file_type: str = 'je', chunk_size: int
     ext = os.path.splitext(str(file_path))[1].lower()
     
     if ext in {'.csv'}:
-        # CSV文件直接使用chunksize
-        for chunk in pd.read_csv(file_path, chunksize=chunk_size, encoding='utf-8', on_bad_lines='skip'):
-            chunk.columns = [str(c).strip() for c in chunk.columns]
+        # CSV 文件使用 pandas 原生 chunksize，避免全量读入内存。
+        for chunk in _read_csv_in_chunks(file_path, chunk_size=chunk_size):
             yield chunk
     elif ext in {'.xlsx', '.xlsm'}:
-        # Excel文件需要手动分批
-        full_df = _load_excel_file(file_path, file_type)
-        
-        if full_df.empty:
-            return
-        
-        total_rows = len(full_df)
-        for start in range(0, total_rows, chunk_size):
-            end = min(start + chunk_size, total_rows)
-            yield full_df.iloc[start:end].copy()
+        # Excel 使用 openpyxl read_only + iter_rows 流式读取。旧实现会先把整个
+        # 工作表读入 list/DataFrame，再切 chunk；大文件会明显放大内存占用。
+        from openpyxl import load_workbook
+
+        wb = load_workbook(file_path, read_only=True, data_only=True)
+        try:
+            sheet_name, header_row_idx = _select_excel_sheet_and_header_row(
+                file_path,
+                prefer_sheet_keywords=['凭证', '序时', '分录'] if file_type == 'je' else ['余额', '科目']
+            )
+            ws = wb[sheet_name] if sheet_name in wb.sheetnames else wb.active
+            row_iter = ws.iter_rows(min_row=header_row_idx, values_only=True)
+
+            try:
+                header_row = next(row_iter)
+            except StopIteration:
+                return
+
+            headers = [str(v).strip() if v is not None else '' for v in header_row]
+            header_to_idx = _build_header_to_idx(headers)
+            data_rows: List[Dict[str, Any]] = []
+
+            for row in row_iter:
+                row_dict = _map_row_to_standard_columns(row, header_to_idx, file_type)
+                if not row_dict:
+                    continue
+                data_rows.append(row_dict)
+
+                if len(data_rows) >= chunk_size:
+                    yield pd.DataFrame(data_rows)
+                    data_rows = []
+
+            if data_rows:
+                yield pd.DataFrame(data_rows)
+        finally:
+            wb.close()
     else:
         return
 
@@ -336,22 +374,49 @@ def load_je_data(je_file_paths: str) -> str:
     try:
         file_list = [f.strip() for f in je_file_paths.split(',')]
         
-        all_dfs = []
         total_rows = 0
+        files_loaded = 0
+        columns: List[str] = []
+        wrote_header = False
+        temp_file = tempfile.NamedTemporaryFile(prefix='je_loaded_', suffix='.csv', delete=False).name
         
         for file_path in file_list:
             if os.path.basename(str(file_path)).startswith('~$'):
                 continue
             if os.path.exists(file_path):
-                df = _load_excel_file(file_path, file_type='je')
-                if df is not None and len(df) > 0:
-                    all_dfs.append(df)
-                    total_rows += len(df)
-                    print(f"成功加载JE文件: {file_path}, 行数: {len(df)}")
+                file_rows = 0
+                for batch in _load_excel_in_chunks(file_path, file_type='je'):
+                    if batch is None or len(batch) == 0:
+                        continue
+
+                    # 解析金额
+                    if '借方金额' in batch.columns:
+                        batch['借方金额'] = batch['借方金额'].apply(parse_currency_value)
+                    if '贷方金额' in batch.columns:
+                        batch['贷方金额'] = batch['贷方金额'].apply(parse_currency_value)
+
+                    # 提取科目代码
+                    if '科目' in batch.columns:
+                        batch['科目编码'] = batch['科目'].apply(extract_account_code)
+
+                    if not columns:
+                        columns = list(batch.columns)
+                    batch.to_csv(temp_file, mode='a', index=False, header=not wrote_header, encoding='utf-8')
+                    wrote_header = True
+                    file_rows += len(batch)
+                    total_rows += len(batch)
+
+                if file_rows > 0:
+                    files_loaded += 1
+                    print(f"成功加载JE文件: {file_path}, 行数: {file_rows}")
             else:
                 print(f"警告: JE文件不存在: {file_path}")
         
-        if not all_dfs:
+        if files_loaded == 0:
+            try:
+                os.unlink(temp_file)
+            except OSError:
+                pass
             return json.dumps({
                 "success": False,
                 "error": "没有成功加载任何JE文件",
@@ -359,28 +424,12 @@ def load_je_data(je_file_paths: str) -> str:
                 "total_rows": 0
             }, ensure_ascii=False)
         
-        combined_df = pd.concat(all_dfs, ignore_index=True)
-        
-        # 解析金额
-        if '借方金额' in combined_df.columns:
-            combined_df['借方金额'] = combined_df['借方金额'].apply(parse_currency_value)
-        if '贷方金额' in combined_df.columns:
-            combined_df['贷方金额'] = combined_df['贷方金额'].apply(parse_currency_value)
-        
-        # 提取科目代码
-        if '科目' in combined_df.columns:
-            combined_df['科目编码'] = combined_df['科目'].apply(extract_account_code)
-        
-        # 保存到临时文件
-        temp_file = '/tmp/je_loaded_data.pkl'
-        combined_df.to_pickle(temp_file)
-        
         return json.dumps({
             "success": True,
-            "message": f"成功加载 {len(all_dfs)} 个JE文件",
-            "files_loaded": len(all_dfs),
-            "total_rows": len(combined_df),
-            "columns": list(combined_df.columns),
+            "message": f"成功加载 {files_loaded} 个JE文件",
+            "files_loaded": files_loaded,
+            "total_rows": total_rows,
+            "columns": columns,
             "data_file": temp_file
         }, ensure_ascii=False)
         
@@ -432,9 +481,9 @@ def load_tb_data(tb_file_path: str) -> str:
         # 过滤到末级科目
         df = _filter_tb_to_leaf_accounts(df)
         
-        # 保存到临时文件
-        temp_file = '/tmp/tb_loaded_data.pkl'
-        df.to_pickle(temp_file)
+        # 保存到唯一临时文件，避免并发请求互相覆盖；使用 CSV 避免 pickle 风险。
+        temp_file = tempfile.NamedTemporaryFile(prefix='tb_loaded_', suffix='.csv', delete=False).name
+        df.to_csv(temp_file, index=False, encoding='utf-8')
         
         return json.dumps({
             "success": True,
