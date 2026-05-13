@@ -46,3 +46,7 @@ __pycache__/
 *.pptx
 *.xlsx
 *.csv
+
+# Local test environments / private fixture aliases
+.test-venv/
+tests/fixtures/local/

@@ -221,3 +221,22 @@ TB 常见列：
 - `invalid character 'R' looking for beginning of value`
 
 通常表示发送给模型或上游 API 的请求体过大。当前默认 `DEFAULT_RESULT_PREVIEW_LIMIT = 0`，`run_reconciliation` 不会在 tool JSON 中返回明细样例，只返回统计和 CSV 文件路径。若仍报 413，应检查调用方是否把原始 Excel/CSV 内容或完整 CSV 明细再次塞进 prompt；正确做法是只读取 `result_files` 中必要的少量行，或基于 CSV 文件路径做分页/筛选。
+
+## 本地真实附件 smoke test
+
+原始财务附件不提交到 Git。可将本地 JE/TB 文件放到 `tests/fixtures/local/`（已被 `*.xlsx` ignore），然后运行：
+
+```bash
+python -m venv .test-venv
+.test-venv/bin/python -m pip install pandas openpyxl numpy
+.test-venv/bin/python tests/smoke_actual_fixtures.py \
+  --je tests/fixtures/local/je.xlsx \
+  --tb tests/fixtures/local/tb.xlsx
+```
+
+该脚本会验证：
+
+- JE/TB Excel 能被解析
+- 大文件 JE 分批读取可用
+- 发生额及余额表双层表头可用
+- `run_reconciliation` 默认不返回 preview，避免 413 / token 超限
