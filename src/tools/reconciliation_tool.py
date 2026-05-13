@@ -18,8 +18,8 @@ from coze_coding_utils.runtime_ctx.context import new_context
 DEFAULT_THRESHOLD = 0.01
 # 默认批次大小（行数）
 DEFAULT_BATCH_SIZE = 10000
-# 工具返回给 LLM 的明细条数上限。完整明细写入临时文件，避免模型上下文超限。
-DEFAULT_RESULT_PREVIEW_LIMIT = 5
+# 工具返回给 LLM 的明细条数上限。默认 0：完整明细只写入临时文件，避免模型/API 请求体超限。
+DEFAULT_RESULT_PREVIEW_LIMIT = 0
 # 内存警告阈值（MB）
 MEMORY_WARNING_THRESHOLD = 500
 
@@ -212,6 +212,8 @@ def _write_records_csv(prefix: str, records: List[Dict[str, Any]]) -> Optional[s
 
 def _preview_records(records: List[Dict[str, Any]], limit: int = DEFAULT_RESULT_PREVIEW_LIMIT) -> List[Dict[str, Any]]:
     """返回少量样例给 LLM，避免工具消息过大。"""
+    if limit <= 0:
+        return []
     return records[:limit]
 
 
@@ -424,7 +426,7 @@ def load_je_data(je_file_paths: str) -> str:
 
                 if file_rows > 0:
                     files_loaded += 1
-                    print(f"成功加载JE文件: {file_path}, 行数: {file_rows}")
+                    print(f"成功加载JE文件: {os.path.basename(file_path)}, 行数: {file_rows}")
             else:
                 print(f"警告: JE文件不存在: {file_path}")
         
@@ -675,7 +677,8 @@ def run_reconciliation(
                     voucher_data = batch[cols].copy()
                     je_vouchers.append(voucher_data)
                 
-                print(f"  JE批次 {batch_count}: {len(batch)} 行，累计 {total_je_rows} 行")
+                if batch_count <= 3 or batch_count % 50 == 0:
+                    print(f"  JE批次 {batch_count}: {len(batch)} 行，累计 {total_je_rows} 行")
         
         print(f"JE数据加载完成: {total_je_rows} 行，{len(je_summary)} 个科目")
         
@@ -827,7 +830,7 @@ def run_reconciliation(
         # 完整明细写入 result_files 指向的 CSV 文件。
         result = {
             "success": True,
-            "message": "对账完成。为避免模型上下文超限，响应仅包含摘要和少量样例；完整明细请读取 result_files 中的 CSV 文件。",
+            "message": "对账完成。为避免模型/API 请求体超限，响应仅包含摘要和文件路径；完整明细请读取 result_files 中的 CSV 文件。",
             "summary": {
                 "总科目数": len(all_codes),
                 "匹配数": matched_count,
@@ -841,14 +844,16 @@ def run_reconciliation(
                 "返回样例条数上限": DEFAULT_RESULT_PREVIEW_LIMIT
             },
             "result_files": result_files,
-            "preview": {
+            "matched_count": matched_count
+        }
+
+        if DEFAULT_RESULT_PREVIEW_LIMIT > 0:
+            result["preview"] = {
                 "differences": _preview_records(differences),
                 "only_in_je": _preview_records(only_in_je),
                 "only_in_tb": _preview_records(only_in_tb),
                 "voucher_issues": _preview_records(voucher_issues),
-            },
-            "matched_count": matched_count
-        }
+            }
         
         return json.dumps(result, ensure_ascii=False, indent=2)
         

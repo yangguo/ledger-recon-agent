@@ -211,3 +211,13 @@ TB 常见列：
 - 完整明细 CSV 的临时文件路径（`result_files`）
 
 完整差异明细请读取 `result_files.differences_csv`、`result_files.only_in_je_csv`、`result_files.only_in_tb_csv` 等文件。这样可以让 Agent 先生成摘要，需要时再按文件路径分批读取明细。
+
+### 413 / context_window_exceeded 排查
+
+如果运行平台报：
+
+- `context_window_exceeded`
+- `RequestError code: 413`
+- `invalid character 'R' looking for beginning of value`
+
+通常表示发送给模型或上游 API 的请求体过大。当前默认 `DEFAULT_RESULT_PREVIEW_LIMIT = 0`，`run_reconciliation` 不会在 tool JSON 中返回明细样例，只返回统计和 CSV 文件路径。若仍报 413，应检查调用方是否把原始 Excel/CSV 内容或完整 CSV 明细再次塞进 prompt；正确做法是只读取 `result_files` 中必要的少量行，或基于 CSV 文件路径做分页/筛选。
