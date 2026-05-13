@@ -201,3 +201,13 @@ TB 常见列：
 - 将 `src/main.py` 拆分为 API 路由、GraphService、CLI 入口。
 - 生产环境中避免使用 pickle 保存中间财务数据。
 - 为 README 中的 HTTP payload 增加与实际 Agent prompt 对齐的更多示例。
+
+## 输出大小与模型上下文
+
+`run_reconciliation` 的返回值会进入 LLM 上下文。为避免大数据集触发 `context_window_exceeded`，工具默认只在 JSON 响应中返回：
+
+- 汇总统计
+- 每类问题最多 5 条 preview
+- 完整明细 CSV 的临时文件路径（`result_files`）
+
+完整差异明细请读取 `result_files.differences_csv`、`result_files.only_in_je_csv`、`result_files.only_in_tb_csv` 等文件。这样可以让 Agent 先生成摘要，需要时再按文件路径分批读取明细。

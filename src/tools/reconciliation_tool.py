@@ -18,6 +18,8 @@ from coze_coding_utils.runtime_ctx.context import new_context
 DEFAULT_THRESHOLD = 0.01
 # 默认批次大小（行数）
 DEFAULT_BATCH_SIZE = 10000
+# 工具返回给 LLM 的明细条数上限。完整明细写入临时文件，避免模型上下文超限。
+DEFAULT_RESULT_PREVIEW_LIMIT = 5
 # 内存警告阈值（MB）
 MEMORY_WARNING_THRESHOLD = 500
 
@@ -197,6 +199,20 @@ def _read_csv_in_chunks(file_path: str, chunk_size: Optional[int] = None) -> Ite
             continue
     if last_error:
         raise last_error
+
+
+def _write_records_csv(prefix: str, records: List[Dict[str, Any]]) -> Optional[str]:
+    """将完整明细写到唯一临时 CSV，返回文件路径；无记录则返回 None。"""
+    if not records:
+        return None
+    path = tempfile.NamedTemporaryFile(prefix=prefix, suffix='.csv', delete=False).name
+    pd.DataFrame(records).to_csv(path, index=False, encoding='utf-8')
+    return path
+
+
+def _preview_records(records: List[Dict[str, Any]], limit: int = DEFAULT_RESULT_PREVIEW_LIMIT) -> List[Dict[str, Any]]:
+    """返回少量样例给 LLM，避免工具消息过大。"""
+    return records[:limit]
 
 
 def _select_excel_sheet_and_header_row(file_path: str, prefer_sheet_keywords: Optional[List[str]] = None) -> Tuple[Optional[str], int]:
@@ -698,7 +714,7 @@ def run_reconciliation(
         # 执行对账
         all_codes = set(je_summary.keys()) | set(tb_summary.keys())
         
-        matched = []
+        matched_count = 0
         differences = []
         only_in_je = []
         only_in_tb = []
@@ -738,13 +754,14 @@ def run_reconciliation(
             elif key not in tb_summary:
                 only_in_je.append(item)
             elif abs(debit_diff) <= threshold and abs(credit_diff) <= threshold:
-                matched.append(item)
+                matched_count += 1
             else:
                 differences.append(item)
         
         # 凭证借贷平衡检查（限制问题数量避免响应过大）
         voucher_issues: list = []
         MAX_VOUCHER_ISSUES = 10  # 限制最多显示10个凭证问题
+        voucher_issue_count = 0
         
         if check_voucher_balance and je_vouchers:
             print("执行凭证借贷平衡检查...")
@@ -764,13 +781,14 @@ def run_reconciliation(
             }).reset_index()
             
             for _, row in grouped.iterrows():
-                if len(voucher_issues) >= MAX_VOUCHER_ISSUES:
-                    break  # 达到上限后停止收集
-                    
                 debit_sum = float(row['借方金额'])
                 credit_sum = float(row['贷方金额'])
                 
                 if abs(debit_sum - credit_sum) > threshold:
+                    voucher_issue_count += 1
+                    if len(voucher_issues) >= MAX_VOUCHER_ISSUES:
+                        continue
+
                     year_val = row.get('年')
                     month_val = row.get('月')
                     period_val = row.get('期间', '')
@@ -795,27 +813,41 @@ def run_reconciliation(
             
             # 计算实际检查的凭证数（不计入已跳过的）
             total_vouchers_checked = len(grouped)
-            print(f"  检查 {total_vouchers_checked} 张凭证，发现 {len(voucher_issues)} 个借贷不平衡问题（最多显示{MAX_VOUCHER_ISSUES}个）")
+            print(f"  检查 {total_vouchers_checked} 张凭证，发现 {voucher_issue_count} 个借贷不平衡问题（最多返回{MAX_VOUCHER_ISSUES}个样例）")
+
+        result_files = {
+            "differences_csv": _write_records_csv('recon_differences_', differences),
+            "only_in_je_csv": _write_records_csv('recon_only_in_je_', only_in_je),
+            "only_in_tb_csv": _write_records_csv('recon_only_in_tb_', only_in_tb),
+            "voucher_issues_preview_csv": _write_records_csv('recon_voucher_issues_preview_', voucher_issues),
+        }
+        result_files = {k: v for k, v in result_files.items() if v}
         
-        # 构建结果
+        # 构建紧凑结果：工具消息会进入 LLM 上下文，不能返回大量明细。
+        # 完整明细写入 result_files 指向的 CSV 文件。
         result = {
             "success": True,
+            "message": "对账完成。为避免模型上下文超限，响应仅包含摘要和少量样例；完整明细请读取 result_files 中的 CSV 文件。",
             "summary": {
                 "总科目数": len(all_codes),
-                "匹配数": len(matched),
+                "匹配数": matched_count,
                 "差异数": len(differences),
                 "仅在JE中": len(only_in_je),
                 "仅在TB中": len(only_in_tb),
-                "凭证异常数": len(voucher_issues),
+                "凭证异常数": voucher_issue_count,
                 "JE总行数": total_je_rows,
                 "TB总行数": len(tb_df),
-                "处理批次": batch_count
+                "处理批次": batch_count,
+                "返回样例条数上限": DEFAULT_RESULT_PREVIEW_LIMIT
             },
-            "differences": differences[:50],
-            "only_in_je": only_in_je[:20],
-            "only_in_tb": only_in_tb[:20],
-            "voucher_issues": voucher_issues[:30],
-            "matched_count": len(matched)
+            "result_files": result_files,
+            "preview": {
+                "differences": _preview_records(differences),
+                "only_in_je": _preview_records(only_in_je),
+                "only_in_tb": _preview_records(only_in_tb),
+                "voucher_issues": _preview_records(voucher_issues),
+            },
+            "matched_count": matched_count
         }
         
         return json.dumps(result, ensure_ascii=False, indent=2)
