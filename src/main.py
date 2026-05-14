@@ -1,14 +1,17 @@
 import argparse
 import asyncio
 import json
+import os
 import threading
 import traceback
 import logging
+import uuid
+from pathlib import Path
 from typing import Any, Dict, Iterable, AsyncIterable, AsyncGenerator, Optional
 import cozeloop
 import uvicorn
 import time
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, UploadFile, File
 from fastapi.responses import StreamingResponse, JSONResponse
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import StateGraph, END
@@ -36,6 +39,13 @@ from coze_coding_utils.openai.handler import OpenAIChatHandler
 from coze_coding_utils.log.parser import LangGraphParser
 from coze_coding_utils.log.err_trace import extract_core_stack
 from coze_coding_utils.log.loop_trace import init_run_config, init_agent_config
+
+if os.getenv("COZE_PROJECT_TYPE") is None:
+    try:
+        __import__("agents.agent")
+        os.environ["COZE_PROJECT_TYPE"] = "agent"
+    except Exception:
+        pass
 
 
 # 超时配置常量
@@ -456,6 +466,18 @@ async def openai_chat_completions(request: Request):
 
     try:
         payload = await request.json()
+        if isinstance(payload, dict) and not payload.get("model"):
+            workspace_path = os.getenv("COZE_WORKSPACE_PATH", ".")
+            config_path = Path(workspace_path) / "config" / "agent_llm_config.json"
+            try:
+                cfg = json.loads(config_path.read_text(encoding="utf-8"))
+                model_name = cfg.get("config", {}).get("model")
+                if isinstance(model_name, str) and model_name.strip():
+                    payload["model"] = model_name
+                else:
+                    payload["model"] = "default"
+            except Exception:
+                payload["model"] = "default"
         return await openai_handler.handle(payload, ctx)
     except json.JSONDecodeError as e:
         logger.error(f"JSON decode error in openai_chat_completions: {e}")
@@ -474,6 +496,53 @@ async def health_check():
         }
     except Exception as e:
         raise HTTPException(status_code=503, detail=str(e))
+
+MAX_UPLOAD_SIZE = 100 * 1024 * 1024
+ALLOWED_UPLOAD_EXTENSIONS = {".xlsx", ".xlsm", ".csv"}
+
+
+@app.post("/upload")
+async def upload_files(files: list[UploadFile] = File(...)):
+    workspace_path = os.getenv("COZE_WORKSPACE_PATH", ".")
+    base_dir = Path(workspace_path) / "assets" / "uploads"
+    base_dir.mkdir(parents=True, exist_ok=True)
+
+    saved_files: list[dict[str, str]] = []
+    for f in files:
+        original_name = Path(f.filename or "upload").name
+        suffix = Path(original_name).suffix.lower()
+        if suffix not in ALLOWED_UPLOAD_EXTENSIONS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"不支持的文件类型: {suffix}，仅允许 {', '.join(sorted(ALLOWED_UPLOAD_EXTENSIONS))}",
+            )
+
+        dest = base_dir / f"{uuid.uuid4().hex}{suffix}"
+        written_size = 0
+        try:
+            with dest.open("wb") as out:
+                while True:
+                    chunk = await f.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    written_size += len(chunk)
+                    if written_size > MAX_UPLOAD_SIZE:
+                        raise HTTPException(
+                            status_code=413,
+                            detail=f"文件 {original_name} 超过大小限制 ({MAX_UPLOAD_SIZE // (1024*1024)}MB)",
+                        )
+                    out.write(chunk)
+        except HTTPException:
+            try:
+                dest.unlink(missing_ok=True)
+            except Exception:
+                pass
+            raise
+
+        rel_path = (Path("assets") / "uploads" / dest.name).as_posix()
+        saved_files.append({"original_name": original_name, "saved_path": rel_path})
+
+    return {"files": saved_files}
 
 
 @app.get(path="/graph_parameter")

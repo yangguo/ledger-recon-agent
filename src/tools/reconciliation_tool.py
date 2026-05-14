@@ -34,6 +34,17 @@ def _normalize_book(value: Any) -> str:
     return s
 
 
+def _normalize_input_path(path_value: Any) -> str:
+    s = str(path_value or "").strip().strip('"').strip("'")
+    if not s:
+        return s
+    s = s.replace("\\", os.sep)
+    if os.path.isabs(s):
+        return os.path.normpath(s)
+    workspace_path = os.getenv("COZE_WORKSPACE_PATH") or os.getcwd()
+    return os.path.normpath(os.path.join(workspace_path, s))
+
+
 JE_COLUMNS = {
     "book": ["账套", "公司", "工厂"],
     "voucher": ["凭证号", "凭证编号", "凭证", "记账凭证号"],
@@ -451,7 +462,7 @@ def load_je_data(je_file_paths: str) -> str:
     ctx = request_context.get() or new_context(method="load_je_data")
     
     try:
-        file_list = [f.strip() for f in je_file_paths.split(',')]
+        file_list = [_normalize_input_path(f.strip()) for f in je_file_paths.split(',') if f.strip()]
         
         total_rows = 0
         files_loaded = 0
@@ -533,6 +544,7 @@ def load_tb_data(tb_file_path: str) -> str:
     ctx = request_context.get() or new_context(method="load_tb_data")
     
     try:
+        tb_file_path = _normalize_input_path(tb_file_path)
         if not os.path.exists(tb_file_path):
             return json.dumps({
                 "success": False,
@@ -699,7 +711,8 @@ def run_reconciliation(
     ctx = request_context.get() or new_context(method="run_reconciliation")
     
     try:
-        file_list = [f.strip() for f in je_file_paths.split(',')]
+        file_list = [_normalize_input_path(f.strip()) for f in je_file_paths.split(',') if f.strip()]
+        tb_file_path = _normalize_input_path(tb_file_path)
         patterns = [p.strip() for p in target_patterns.split(',') if p.strip()] if target_patterns else []
         
         # 分批汇总JE数据
@@ -710,6 +723,8 @@ def run_reconciliation(
         batch_count = 0
         
         for file_path in file_list:
+            if os.path.basename(str(file_path)).startswith('~$'):
+                continue
             if not os.path.exists(file_path):
                 print(f"警告: JE文件不存在: {file_path}")
                 continue
