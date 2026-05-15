@@ -1,0 +1,17 @@
+.venv
+__pycache__
+*.pyc
+.git
+.claude
+node_modules
+frontend
+_agent-chat-ui-tmp
+.env
+.env.local
+*.xlsx
+*.xlsm
+*.csv
+*.zip
+.test-venv
+tests/fixtures/local
+assets/uploads
