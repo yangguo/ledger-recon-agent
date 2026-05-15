@@ -86,33 +86,74 @@ export const StreamProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       const sid = sessionId || threadId || uuidv4();
       if (!threadId) setThreadId(sid);
       if (!sessionId) setSessionId(sid);
-      const res = await fetch("/api/chat", {
+      const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:5000";
+      const aiId = uuidv4();
+      const placeholderAi: Message = { id: aiId, type: "ai", content: "" } as any;
+      setMessages((prev) => [...prev, placeholderAi]);
+
+      const res = await fetch(`${backendUrl}/stream_run`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ message: text, session_id: sid }),
+        headers: {
+          "content-type": "application/json",
+          "x-run-id": sid
+        },
+        body: JSON.stringify({ messages: [{ role: "user", content: text }] }),
         signal: abort.signal
       });
 
-      const data = (await res.json()) as { text?: string; error?: string; status?: number; body?: unknown };
-      if (!res.ok) {
-        const detail = {
-          error: data?.error || "Backend request failed",
-          backend_status: data?.status,
-          body: data?.body
-        };
-        setError(detail);
+      if (!res.ok || !res.body) {
+        const data = (await res.text());
+        setError(data || "Backend request failed");
+        setMessages((prev) => prev.filter((m) => m.id !== aiId));
         return;
       }
 
-      const assistantText = (data?.text || "").trim();
-      if (!assistantText) return;
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let lastText = "";
 
-      const aiMessage: Message = {
-        id: uuidv4(),
-        type: "ai",
-        content: assistantText
-      } as any;
-      setMessages((prev) => [...prev, aiMessage]);
+      while (!abort.signal.aborted) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        while (true) {
+          const idx = buffer.indexOf("\n\n");
+          if (idx === -1) break;
+          const rawEvent = buffer.slice(0, idx);
+          buffer = buffer.slice(idx + 2);
+
+          const dataLines = rawEvent
+            .split("\n")
+            .filter((l) => l.startsWith("data:"))
+            .map((l) => l.slice(5).trim());
+          if (dataLines.length === 0) continue;
+
+          try {
+            const chunk = JSON.parse(dataLines.join("\n"));
+            const messages = (chunk as any)?.messages;
+            if (!Array.isArray(messages)) continue;
+            for (let i = messages.length - 1; i >= 0; i -= 1) {
+              const m = messages[i];
+              if (m?.type === "ai" && typeof m?.content === "string") {
+                lastText = m.content;
+                break;
+              }
+            }
+          } catch {
+            // skip unparseable chunks
+          }
+
+          setMessages((prev) =>
+            prev.map((m) => (m.id === aiId ? ({ ...m, content: lastText } as any) : m)),
+          );
+        }
+      }
+
+      if (!lastText.trim()) {
+        setMessages((prev) => prev.filter((m) => m.id !== aiId));
+      }
     } catch (e) {
       if ((e as any)?.name !== "AbortError") setError(e);
     } finally {

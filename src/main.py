@@ -12,6 +12,7 @@ import cozeloop
 import uvicorn
 import time
 from fastapi import FastAPI, HTTPException, Request, UploadFile, File
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, JSONResponse
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import StateGraph, END
@@ -245,6 +246,14 @@ class GraphService:
 
 service = GraphService()
 app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # OpenAI 兼容接口处理器
 openai_handler = OpenAIChatHandler(service)
