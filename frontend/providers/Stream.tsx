@@ -91,13 +91,16 @@ export const StreamProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       const placeholderAi: Message = { id: aiId, type: "ai", content: "" } as any;
       setMessages((prev) => [...prev, placeholderAi]);
 
-      const res = await fetch(`${backendUrl}/stream_run`, {
+      const res = await fetch(`${backendUrl}/v1/chat/completions`, {
         method: "POST",
         headers: {
-          "content-type": "application/json",
-          "x-run-id": sid
+          "content-type": "application/json"
         },
-        body: JSON.stringify({ messages: [{ role: "user", content: text }] }),
+        body: JSON.stringify({
+          messages: [{ role: "user", content: text }],
+          session_id: sid,
+          stream: true
+        }),
         signal: abort.signal
       });
 
@@ -130,24 +133,21 @@ export const StreamProvider: React.FC<{ children: ReactNode }> = ({ children }) 
             .map((l) => l.slice(5).trim());
           if (dataLines.length === 0) continue;
 
+          const dataText = dataLines.join("\n");
+          if (dataText === "[DONE]") continue;
+
           try {
-            const chunk = JSON.parse(dataLines.join("\n"));
-            const messages = (chunk as any)?.messages;
-            if (!Array.isArray(messages)) continue;
-            for (let i = messages.length - 1; i >= 0; i -= 1) {
-              const m = messages[i];
-              if (m?.type === "ai" && typeof m?.content === "string") {
-                lastText = m.content;
-                break;
-              }
+            const chunk = JSON.parse(dataText);
+            const delta = chunk?.choices?.[0]?.delta?.content;
+            if (typeof delta === "string") {
+              lastText = lastText + delta;
+              setMessages((prev) =>
+                prev.map((m) => (m.id === aiId ? ({ ...m, content: lastText } as any) : m)),
+              );
             }
           } catch {
             // skip unparseable chunks
           }
-
-          setMessages((prev) =>
-            prev.map((m) => (m.id === aiId ? ({ ...m, content: lastText } as any) : m)),
-          );
         }
       }
 
