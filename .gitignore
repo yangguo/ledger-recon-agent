@@ -54,6 +54,7 @@ tests/fixtures/local/
 
 # Claude Code
 .claude/
+.worktrees/
 
 # Frontend dependencies
 frontend/node_modules/
