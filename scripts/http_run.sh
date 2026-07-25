@@ -3,7 +3,9 @@
 set -e
 # 导出环境变量
 
-WORK_DIR="${COZE_WORKSPACE_PATH:-.}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+WORK_DIR="${COZE_WORKSPACE_PATH:-$(dirname "$SCRIPT_DIR")}"
+export COZE_WORKSPACE_PATH="$WORK_DIR"
 PORT=8000
 
 usage() {
