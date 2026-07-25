@@ -11,8 +11,7 @@ import os
 import tempfile
 from typing import List, Dict, Optional, Tuple, Any, Iterator, Generator
 from langchain.tools import tool
-from coze_coding_utils.log.write_log import request_context
-from coze_coding_utils.runtime_ctx.context import new_context
+from config import workspace_path
 
 # 默认配置
 DEFAULT_THRESHOLD = 0.01
@@ -41,8 +40,7 @@ def _normalize_input_path(path_value: Any) -> str:
     s = s.replace("\\", os.sep)
     if os.path.isabs(s):
         return os.path.normpath(s)
-    workspace_path = os.getenv("COZE_WORKSPACE_PATH") or os.getcwd()
-    return os.path.normpath(os.path.join(workspace_path, s))
+    return os.path.normpath(os.path.join(workspace_path(), s))
 
 
 JE_COLUMNS = {
