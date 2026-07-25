@@ -3,6 +3,11 @@ from pathlib import Path
 
 
 class ColabCliRunnerTests(unittest.TestCase):
+    def test_supported_gpus_include_g4_for_large_quantized_models(self):
+        from scripts.colab_qwen_api_cli import SUPPORTED_GPUS
+
+        self.assertIn("G4", SUPPORTED_GPUS)
+
     def test_build_session_commands_provisions_uploads_and_opens_console(self):
         from scripts.colab_qwen_api_cli import build_session_commands
 

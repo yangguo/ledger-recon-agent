@@ -10,6 +10,7 @@ from pathlib import Path
 
 
 REMOTE_LAUNCHER_PATH = "/content/qwen36_27b_api.py"
+SUPPORTED_GPUS = ("G4", "L4", "A100", "H100")
 
 
 def build_session_commands(
@@ -33,7 +34,7 @@ def run(command: list[str]) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--session", default="qwen36-api")
-    parser.add_argument("--gpu", default="L4", choices=("L4", "A100", "H100"))
+    parser.add_argument("--gpu", default="L4", choices=SUPPORTED_GPUS)
     parser.add_argument("--setup-only", action="store_true")
     parser.add_argument("--stop", action="store_true")
     args = parser.parse_args()
