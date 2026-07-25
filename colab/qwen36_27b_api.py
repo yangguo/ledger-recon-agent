@@ -14,6 +14,7 @@ import getpass
 import json
 import os
 import re
+import select
 import shlex
 import shutil
 import subprocess
@@ -29,6 +30,7 @@ MODEL_REPO = "unsloth/Qwen3.6-27B-GGUF"
 MODEL_FILE = "Qwen3.6-27B-Q4_K_M.gguf"
 SERVED_MODEL_NAME = "qwen3.6-27b-q4_k_m"
 MINIMUM_FREE_VRAM_MIB = 20_000
+TUNNEL_PROVIDERS = {"1": "cloudflare", "2": "ngrok", "3": "quick"}
 
 
 def build_llama_server_arguments(model_path: str, api_key: str, context_size: int) -> list[str]:
@@ -59,8 +61,9 @@ def build_llama_server_command(model_path: str, api_key: str, context_size: int)
     return shlex.join(build_llama_server_arguments(model_path, api_key, context_size))
 
 
-def run(command: list[str], *, quiet: bool = False) -> None:
-    print("+", shlex.join(command))
+def run(command: list[str], *, quiet: bool = False, redacted_values: set[str] | None = None) -> None:
+    printable = ["[REDACTED]" if value in (redacted_values or set()) else value for value in command]
+    print("+", shlex.join(printable))
     subprocess.run(
         command,
         check=True,
@@ -130,6 +133,20 @@ def install_cloudflared() -> Path:
     return binary
 
 
+def install_ngrok() -> Path:
+    binary = Path("/usr/local/bin/ngrok")
+    if not binary.exists():
+        run([
+            "bash", "-lc",
+            "curl -s https://ngrok-agent.s3.amazonaws.com/ngrok.asc "
+            "| tee /etc/apt/trusted.gpg.d/ngrok.asc >/dev/null && "
+            "echo 'deb https://ngrok-agent.s3.amazonaws.com buster main' "
+            "| tee /etc/apt/sources.list.d/ngrok.list >/dev/null && "
+            "apt-get update -qq && apt-get install -y ngrok",
+        ])
+    return binary
+
+
 def wait_for_health(api_key: str, timeout_seconds: int = 600) -> None:
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
@@ -181,9 +198,27 @@ def public_base_url(value: str) -> str:
     return value if value.endswith("/v1") else f"{value}/v1"
 
 
+def select_tunnel_provider(value: str) -> str:
+    """Return the selected tunnel provider or explain the available choices."""
+    try:
+        return TUNNEL_PROVIDERS[value.strip()]
+    except KeyError as error:
+        raise ValueError("Tunnel mode must be 1 (Cloudflare), 2 (ngrok), or 3 (Cloudflare Quick Tunnel)") from error
+
+
 def build_ngrok_arguments(binary: str) -> list[str]:
     """Return the ngrok HTTP tunnel command for the loopback-only API server."""
     return [binary, "http", f"127.0.0.1:{PORT}"]
+
+
+def build_named_tunnel_arguments(binary: str, tunnel_token: str) -> list[str]:
+    """Return the Cloudflare Named Tunnel command."""
+    return [binary, "tunnel", "--no-autoupdate", "run", "--token", tunnel_token]
+
+
+def build_quick_tunnel_arguments(binary: str) -> list[str]:
+    """Return the Cloudflare Quick Tunnel command for the loopback-only API server."""
+    return [binary, "tunnel", "--no-autoupdate", "--url", f"http://127.0.0.1:{PORT}"]
 
 
 def extract_quick_tunnel_url(line: str) -> str | None:
@@ -192,34 +227,123 @@ def extract_quick_tunnel_url(line: str) -> str | None:
     return public_base_url(match.group(0)) if match else None
 
 
+def extract_ngrok_public_base_url(payload: object) -> str:
+    """Return the HTTPS URL from ngrok's local inspection API payload."""
+    if not isinstance(payload, dict):
+        raise RuntimeError("ngrok inspection API returned an invalid response")
+    tunnels = payload.get("tunnels")
+    if not isinstance(tunnels, list):
+        raise RuntimeError("ngrok inspection API returned no tunnels")
+    for tunnel in tunnels:
+        if isinstance(tunnel, dict) and isinstance(tunnel.get("public_url"), str):
+            url = tunnel["public_url"]
+            if url.startswith("https://"):
+                return public_base_url(url)
+    raise RuntimeError("ngrok did not expose an HTTPS tunnel")
+
+
+def wait_for_ngrok_public_base_url(timeout_seconds: int = 60) -> str:
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        try:
+            with urlopen("http://127.0.0.1:4040/api/tunnels", timeout=3) as response:
+                return extract_ngrok_public_base_url(json.load(response))
+        except (OSError, RuntimeError, json.JSONDecodeError):
+            time.sleep(1)
+    raise TimeoutError("ngrok did not publish an HTTPS endpoint before the timeout")
+
+
+def wait_for_quick_tunnel_url(process: subprocess.Popen[str], timeout_seconds: int = 60) -> str:
+    """Read cloudflared logs until TryCloudflare prints the generated URL."""
+    if process.stdout is None:
+        raise RuntimeError("cloudflared output is unavailable")
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        ready, _, _ = select.select([process.stdout], [], [], min(1, deadline - time.monotonic()))
+        if not ready:
+            continue
+        line = process.stdout.readline()
+        if not line:
+            if process.poll() is not None:
+                raise RuntimeError("Cloudflare Quick Tunnel exited before publishing a URL")
+            continue
+        print(line, end="")
+        public_url = extract_quick_tunnel_url(line)
+        if public_url:
+            return public_url
+    raise TimeoutError("Cloudflare Quick Tunnel did not publish an HTTPS endpoint before the timeout")
+
+
 def main() -> None:
     require_gpu()
-    public_base_url = validate_public_base_url(input("Cloudflare public HTTPS endpoint (ending in /v1): ").strip())
-    tunnel_token = getpass.getpass("Cloudflare Named Tunnel token: ").strip()
+    print("Select public tunnel: 1) Cloudflare Named Tunnel  2) ngrok  3) Cloudflare Quick Tunnel")
+    provider = select_tunnel_provider(input("Tunnel mode [1]: ").strip() or "1")
+
+    named_public_base_url: str | None = None
+    tunnel_secret: str | None = None
+    if provider == "cloudflare":
+        named_public_base_url = validate_public_base_url(
+            input("Cloudflare public HTTPS endpoint (ending in /v1): ").strip()
+        )
+        tunnel_secret = getpass.getpass("Cloudflare Named Tunnel token: ").strip()
+    elif provider == "ngrok":
+        tunnel_secret = getpass.getpass("ngrok authtoken: ").strip()
+    else:
+        print("WARNING: Cloudflare Quick Tunnel is temporary and does not support stream: true. Use it only for stream: false testing.")
+
     api_key = getpass.getpass("New API key for this LLM service: ").strip()
     hf_token = getpass.getpass("Optional Hugging Face token (press Enter for public download): ").strip() or None
-    if not tunnel_token or not api_key:
-        raise ValueError("Cloudflare tunnel token and API key are required")
+    if not api_key or (provider in {"cloudflare", "ngrok"} and not tunnel_secret):
+        raise ValueError("The selected tunnel credential and the LLM API key are required")
 
     install_llama_cpp()
     model_path = download_model(hf_token)
     context_size = 8192
     command = build_llama_server_arguments(str(model_path), api_key, context_size)
     server = subprocess.Popen(command)
-    tunnel: subprocess.Popen[bytes] | None = None
+    tunnel = None
+    ngrok_config_path: Path | None = None
     try:
         wait_for_health(api_key)
         require_authentication()
-        cloudflared = install_cloudflared()
-        tunnel = subprocess.Popen([str(cloudflared), "tunnel", "--no-autoupdate", "run", "--token", tunnel_token])
-        print("\nService is live. Copy this profile to your local config/llm_profiles.json:")
-        print(json.dumps({"profiles": {"colab-qwen36": {"base_url": public_base_url, "model": SERVED_MODEL_NAME, "api_key_env": "COLAB_LLM_API_KEY"}}}, indent=2))
+        if provider == "cloudflare":
+            cloudflared = install_cloudflared()
+            tunnel = subprocess.Popen(build_named_tunnel_arguments(str(cloudflared), tunnel_secret))
+            public_url = named_public_base_url
+        elif provider == "ngrok":
+            ngrok = install_ngrok()
+            ngrok_config_path = Path("/content/.ngrok-colab.yml")
+            run(
+                [str(ngrok), "config", "add-authtoken", tunnel_secret, "--config", str(ngrok_config_path)],
+                quiet=True,
+                redacted_values={tunnel_secret},
+            )
+            tunnel = subprocess.Popen(build_ngrok_arguments(str(ngrok)) + ["--config", str(ngrok_config_path)])
+            public_url = wait_for_ngrok_public_base_url()
+        else:
+            cloudflared = install_cloudflared()
+            tunnel = subprocess.Popen(
+                build_quick_tunnel_arguments(str(cloudflared)),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
+            public_url = wait_for_quick_tunnel_url(tunnel)
+
+        if public_url is None:
+            raise RuntimeError("Tunnel did not provide a public URL")
+        print("\nService is live. Set these values in your local .env:")
+        print(f"LLM_BASE_URL={public_url}")
+        print(f"LLM_MODEL={SERVED_MODEL_NAME}")
+        print("LLM_API_KEY=<the API key entered above>")
         print("\nKeep this Colab cell running. Interrupt it to stop both the API and tunnel.")
         tunnel.wait()
     finally:
         if tunnel is not None and tunnel.poll() is None:
             tunnel.terminate()
         server.terminate()
+        if ngrok_config_path is not None:
+            ngrok_config_path.unlink(missing_ok=True)
 
 
 if __name__ == "__main__":
