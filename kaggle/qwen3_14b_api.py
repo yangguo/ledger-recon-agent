@@ -96,6 +96,15 @@ def wait_for_ngrok_public_base_url(timeout_seconds: int = 60) -> str:
     raise TimeoutError("ngrok did not publish an HTTPS endpoint before the timeout")
 
 
+def require_authentication() -> None:
+    try:
+        with urlopen(Request(f"http://127.0.0.1:{PORT}/v1/props"), timeout=5) as response:
+            raise RuntimeError(f"Authentication self-check failed: HTTP {response.status}")
+    except HTTPError as error:
+        if error.code != 401:
+            raise RuntimeError(f"Authentication self-check failed: HTTP {error.code}") from error
+
+
 def run(command: list[str], *, env: dict[str, str] | None = None) -> None:
     print("+", " ".join(command))
     subprocess.run(command, check=True, env=env)
@@ -128,6 +137,7 @@ def main() -> None:
                 time.sleep(2)
         else:
             raise TimeoutError("llama.cpp did not become ready")
+        require_authentication()
         run(["bash", "-lc", "curl -s https://ngrok-agent.s3.amazonaws.com/ngrok.asc | tee /etc/apt/trusted.gpg.d/ngrok.asc >/dev/null && echo 'deb https://ngrok-agent.s3.amazonaws.com buster main' | tee /etc/apt/sources.list.d/ngrok.list >/dev/null && apt-get update -qq && apt-get install -y ngrok"])
         subprocess.run(["ngrok", "config", "add-authtoken", ngrok_token, "--config", config], check=True, stdout=subprocess.DEVNULL)
         tunnel = subprocess.Popen(build_ngrok_arguments("ngrok") + ["--config", config])

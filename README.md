@@ -152,4 +152,46 @@ curl -i "$LLM_BASE_URL/chat/completions" \
   -H "Authorization: Bearer $LLM_API_KEY" \
   -H 'Content-Type: application/json' \
   -d '{"model":"qwen3.6-27b-q4_k_m","messages":[{"role":"user","content":"连接成功"}],"max_tokens":64}'
+
+## Kaggle 自部署（Qwen3-14B）
+
+Kaggle 常见 16 GB GPU 无法稳定运行本项目的 Qwen3.6-27B；`kaggle/qwen3_14b_api.py` 改用
+`Qwen/Qwen3-14B-GGUF` 的 `Qwen3-14B-Q4_K_M.gguf`，并要求至少 14 GiB 空闲显存。
+这是临时开发服务：Kaggle 会话或配额结束后，ngrok URL 会失效。
+
+1. 安装并登录官方 Kaggle CLI；在 Kaggle 设置中生成 API token 后按官方说明配置：
+
+   ```bash
+   uv tool install kaggle
+   kaggle --help
+   ```
+
+2. 在 Kaggle Notebook 的 **Add-ons > Secrets** 添加并授权给该 Notebook：
+
+   - `LLM_API_KEY`：新的 llama.cpp API key
+   - `NGROK_AUTHTOKEN`：ngrok Dashboard 的 authtoken
+   - `HF_TOKEN`：可选；公开模型下载可留空
+
+3. 本机准备并推送私有 GPU Notebook。将 `vyang/qwen3-14b-api` 换为自己的 `用户名/slug`：
+
+   ```bash
+   uv run python scripts/kaggle_qwen_api_cli.py --kernel vyang/qwen3-14b-api
+   ```
+
+   CLI 只生成 `kernel-metadata.json`、Notebook 和启动器，不会写入或上传密钥。它默认请求
+   `NvidiaTeslaP100`；若你的账号有更高显存资源，可传入 `--accelerator NvidiaL4`。
+
+4. 观察运行状态与 Notebook 日志；日志中的 `LLM_BASE_URL` 是当次运行的公网地址：
+
+   ```bash
+   kaggle kernels status vyang/qwen3-14b-api
+   ```
+
+5. 将日志显示的地址填写到本地 `.env`，并把 `LLM_API_KEY` 填为 Kaggle Secret 中的同一值：
+
+   ```dotenv
+   LLM_BASE_URL=https://随机地址.ngrok.app/v1
+   LLM_MODEL=qwen3-14b-q4_k_m
+   LLM_API_KEY=Kaggle_Secret中的LLM_API_KEY
+   ```
 ```

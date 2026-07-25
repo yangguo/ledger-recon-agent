@@ -1,4 +1,6 @@
 import unittest
+from unittest.mock import patch
+from urllib.error import HTTPError
 
 
 class KaggleQwenLauncherTests(unittest.TestCase):
@@ -57,6 +59,12 @@ class KaggleQwenLauncherTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "NGROK_AUTHTOKEN") as error:
             load_secrets(Secrets())
         self.assertNotIn("secret", str(error.exception))
+
+    def test_authentication_gate_accepts_401(self):
+        from kaggle.qwen3_14b_api import require_authentication
+
+        with patch("kaggle.qwen3_14b_api.urlopen", side_effect=HTTPError("url", 401, "Unauthorized", {}, None)):
+            require_authentication()
 
 
 if __name__ == "__main__":
