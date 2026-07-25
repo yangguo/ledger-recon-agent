@@ -19,7 +19,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 
 PORT = 8000
@@ -29,9 +29,9 @@ SERVED_MODEL_NAME = "qwen3.6-27b-q4_k_m"
 MINIMUM_FREE_VRAM_MIB = 20_000
 
 
-def build_llama_server_command(model_path: str, api_key: str, context_size: int) -> str:
-    """Return a printable command for llama.cpp's OpenAI-compatible server."""
-    command = [
+def build_llama_server_arguments(model_path: str, api_key: str, context_size: int) -> list[str]:
+    """Return process arguments for llama.cpp's OpenAI-compatible server."""
+    return [
         "/content/llama.cpp/build/bin/llama-server",
         "--model",
         model_path,
@@ -50,7 +50,11 @@ def build_llama_server_command(model_path: str, api_key: str, context_size: int)
         "--flash-attn",
         "on",
     ]
-    return shlex.join(command)
+
+
+def build_llama_server_command(model_path: str, api_key: str, context_size: int) -> str:
+    """Return a printable version of the llama.cpp server arguments."""
+    return shlex.join(build_llama_server_arguments(model_path, api_key, context_size))
 
 
 def run(command: list[str], *, quiet: bool = False) -> None:
@@ -127,7 +131,7 @@ def install_cloudflared() -> Path:
 def wait_for_health(api_key: str, timeout_seconds: int = 600) -> None:
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
-        request = __import__("urllib.request", fromlist=["Request"]).Request(
+        request = Request(
             f"http://127.0.0.1:{PORT}/v1/models",
             headers={"Authorization": f"Bearer {api_key}"},
         )
@@ -160,8 +164,9 @@ def main() -> None:
     install_llama_cpp()
     model_path = download_model(hf_token)
     context_size = 8192
-    command = build_llama_server_command(str(model_path), api_key, context_size)
-    server = subprocess.Popen(command, shell=True)
+    command = build_llama_server_arguments(str(model_path), api_key, context_size)
+    server = subprocess.Popen(command)
+    tunnel: subprocess.Popen[bytes] | None = None
     try:
         wait_for_health(api_key)
         cloudflared = install_cloudflared()
@@ -171,6 +176,8 @@ def main() -> None:
         print("\nKeep this Colab cell running. Interrupt it to stop both the API and tunnel.")
         tunnel.wait()
     finally:
+        if tunnel is not None and tunnel.poll() is None:
+            tunnel.terminate()
         server.terminate()
 
 
