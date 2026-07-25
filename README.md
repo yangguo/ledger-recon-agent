@@ -107,7 +107,8 @@ set +a
 
    根据提示输入 `https://llm.vyang.xyz/v1`、Cloudflare tunnel token 和一个新建的高强度
    API key。token 与 key 不会嵌入通过 `colab exec` 传输的脚本；请勿执行 `colab log`
-   或复制 remote console 的敏感输入。
+   或复制 remote console 的敏感输入。启动器会先验证未携带 key 的受保护接口返回 `401`；
+   若验证失败，会停止本地模型服务且不会启动 tunnel。
 3. 在本机保存 profile（该文件包含 endpoint，但不要写入 API key）：
 
    ```bash
@@ -127,14 +128,14 @@ set +a
 4. 在本机确认连通性。API key 请只从 shell 环境变量读取：
 
    ```bash
-   curl --fail-with-body "$COZE_INTEGRATION_MODEL_BASE_URL/models" \
-     -H "Authorization: Bearer $COLAB_LLM_API_KEY"
-
    curl -N --fail-with-body "$COZE_INTEGRATION_MODEL_BASE_URL/chat/completions" \
      -H "Authorization: Bearer $COLAB_LLM_API_KEY" \
      -H 'Content-Type: application/json' \
      -d '{"model":"qwen3.6-27b-q4_k_m","messages":[{"role":"user","content":"Reply with OK."}],"stream":true}'
    ```
+
+   llama.cpp 有意公开 `/health` 与 `/models`（包括 `/v1` 前缀版本），因此不要以模型列表
+   是否需要 key 作为鉴权验证；请以 `chat/completions` 等推理接口为准。
 
 保持 remote console 和模型进程运行才能提供服务；runtime 休眠或 tunnel token 被撤销都会使
 远程 API 不可用。完成后执行：

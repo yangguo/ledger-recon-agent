@@ -19,6 +19,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 
@@ -145,6 +146,25 @@ def wait_for_health(api_key: str, timeout_seconds: int = 600) -> None:
     raise TimeoutError("llama.cpp did not become ready before the timeout")
 
 
+def require_authentication() -> None:
+    """Refuse to publish the server unless an unauthenticated protected route returns 401."""
+    request = Request(f"http://127.0.0.1:{PORT}/v1/props")
+    try:
+        with urlopen(request, timeout=5) as response:
+            raise RuntimeError(
+                f"llama.cpp authentication self-check failed: unauthenticated /v1/props returned {response.status}"
+            )
+    except HTTPError as error:
+        if error.code == 401:
+            print("llama.cpp authentication self-check passed.")
+            return
+        raise RuntimeError(
+            f"llama.cpp authentication self-check failed: /v1/props returned HTTP {error.code}"
+        ) from error
+    except OSError as error:
+        raise RuntimeError("llama.cpp authentication self-check could not reach /v1/props") from error
+
+
 def validate_public_base_url(value: str) -> str:
     value = value.rstrip("/")
     if not value.startswith("https://") or not value.endswith("/v1"):
@@ -169,6 +189,7 @@ def main() -> None:
     tunnel: subprocess.Popen[bytes] | None = None
     try:
         wait_for_health(api_key)
+        require_authentication()
         cloudflared = install_cloudflared()
         tunnel = subprocess.Popen([str(cloudflared), "tunnel", "--no-autoupdate", "run", "--token", tunnel_token])
         print("\nService is live. Copy this profile to your local config/llm_profiles.json:")

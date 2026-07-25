@@ -1,4 +1,6 @@
 import unittest
+from unittest.mock import patch
+from urllib.error import HTTPError
 
 
 class ColabQwenLauncherTests(unittest.TestCase):
@@ -17,6 +19,15 @@ class ColabQwenLauncherTests(unittest.TestCase):
         self.assertIn("--model /content/model.gguf", command)
         self.assertIn("--api-key secret", command)
         self.assertIn("--port 8000", command)
+
+    def test_authentication_gate_accepts_401_from_protected_route(self):
+        from colab.qwen36_27b_api import require_authentication
+
+        with patch(
+            "colab.qwen36_27b_api.urlopen",
+            side_effect=HTTPError("http://127.0.0.1:8000/v1/props", 401, "Unauthorized", {}, None),
+        ):
+            require_authentication()
 
 
 if __name__ == "__main__":
