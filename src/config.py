@@ -10,13 +10,13 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 
-load_dotenv()
-
-
 def workspace_path() -> Path:
     """Return the project workspace, defaulting to the repository root."""
     configured = os.getenv("APP_WORKSPACE_PATH")
     return Path(configured).expanduser().resolve() if configured else Path(__file__).resolve().parents[1]
+
+
+load_dotenv(workspace_path() / ".env")
 
 
 @dataclass(frozen=True)
