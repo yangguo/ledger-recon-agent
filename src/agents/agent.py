@@ -43,7 +43,7 @@ def build_agent(ctx=None):
     base_url = os.getenv("COZE_INTEGRATION_MODEL_BASE_URL")
 
     llm = ChatOpenAI(
-        model=cfg['config'].get("model", "doubao-seed-1-8-251228"),
+        model=os.getenv("COZE_INTEGRATION_MODEL") or cfg['config'].get("model", "doubao-seed-1-8-251228"),
         api_key=api_key,
         base_url=base_url,
         temperature=cfg['config'].get('temperature', 0.3),
