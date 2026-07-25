@@ -13,6 +13,7 @@ from __future__ import annotations
 import getpass
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -170,6 +171,25 @@ def validate_public_base_url(value: str) -> str:
     if not value.startswith("https://") or not value.endswith("/v1"):
         raise ValueError("Public endpoint must be an HTTPS URL ending in /v1")
     return value
+
+
+def public_base_url(value: str) -> str:
+    """Normalize a tunnel URL to the OpenAI-compatible `/v1` base URL."""
+    value = value.rstrip("/")
+    if not value.startswith("https://"):
+        raise ValueError("Tunnel URL must use HTTPS")
+    return value if value.endswith("/v1") else f"{value}/v1"
+
+
+def build_ngrok_arguments(binary: str) -> list[str]:
+    """Return the ngrok HTTP tunnel command for the loopback-only API server."""
+    return [binary, "http", f"127.0.0.1:{PORT}"]
+
+
+def extract_quick_tunnel_url(line: str) -> str | None:
+    """Extract and normalize the generated TryCloudflare URL from one log line."""
+    match = re.search(r"https://[a-z0-9-]+\.trycloudflare\.com", line)
+    return public_base_url(match.group(0)) if match else None
 
 
 def main() -> None:

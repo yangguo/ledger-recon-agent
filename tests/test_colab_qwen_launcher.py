@@ -29,6 +29,22 @@ class ColabQwenLauncherTests(unittest.TestCase):
         ):
             require_authentication()
 
+    def test_ngrok_command_targets_loopback_port(self):
+        from colab.qwen36_27b_api import build_ngrok_arguments
+
+        self.assertEqual(
+            build_ngrok_arguments("/usr/local/bin/ngrok"),
+            ["/usr/local/bin/ngrok", "http", "127.0.0.1:8000"],
+        )
+
+    def test_extract_quick_tunnel_url_returns_v1_address(self):
+        from colab.qwen36_27b_api import extract_quick_tunnel_url
+
+        self.assertEqual(
+            extract_quick_tunnel_url("INF | https://demo.trycloudflare.com |"),
+            "https://demo.trycloudflare.com/v1",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
