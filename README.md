@@ -91,15 +91,23 @@ set +a
    public hostname，例如 `llm.example.com`，service 填 `http://127.0.0.1:8000`。
    在 tunnel 页面复制 token。不要使用 Quick Tunnel：它不支持 SSE，无法转发本项目
    的流式模型响应。
-2. 在 Colab 选择 GPU runtime，上传 `colab/qwen36_27b_api.py` 并运行：
+2. 在本机安装 [Google Colab CLI](https://github.com/googlecolab/google-colab-cli)，并由 CLI
+   创建一个持续运行的 L4 session、上传启动器、进入远程 console：
 
    ```bash
-   !python qwen36_27b_api.py
+   uv tool install google-colab-cli
+   uv run python scripts/colab_qwen_api_cli.py --gpu L4
    ```
 
-   根据提示输入 `https://llm.example.com/v1`、Cloudflare tunnel token 和一个新建的
-   高强度 API key。token 与 key 只保留在当前 Colab runtime 内存，不会写入仓库或
-   notebook 输出。
+   remote console 打开后，运行其打印的命令：
+
+   ```bash
+   python /content/qwen36_27b_api.py
+   ```
+
+   根据提示输入 `https://llm.vyang.xyz/v1`、Cloudflare tunnel token 和一个新建的高强度
+   API key。token 与 key 不会嵌入通过 `colab exec` 传输的脚本；请勿执行 `colab log`
+   或复制 remote console 的敏感输入。
 3. 在本机保存 profile（该文件包含 endpoint，但不要写入 API key）：
 
    ```bash
@@ -128,8 +136,14 @@ set +a
      -d '{"model":"qwen3.6-27b-q4_k_m","messages":[{"role":"user","content":"Reply with OK."}],"stream":true}'
    ```
 
-保持 Colab cell 运行才能提供服务；停止 cell、runtime 休眠或 tunnel token 被撤销都会使
-远程 API 不可用。完成后在 Colab 中中断运行，并可在 Cloudflare 删除 tunnel token。
+保持 remote console 和模型进程运行才能提供服务；runtime 休眠或 tunnel token 被撤销都会使
+远程 API 不可用。完成后执行：
+
+```bash
+uv run python scripts/colab_qwen_api_cli.py --stop
+```
+
+这会终止 Colab runtime；随后可在 Cloudflare 删除或轮换 tunnel token。
 
 ## 运行
 
