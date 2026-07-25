@@ -21,7 +21,7 @@ class HttpRunScriptTests(unittest.TestCase):
             result_path = temporary_path / "result.txt"
             fake_python = fake_bin / "python"
             fake_python.write_text(
-                "#!/bin/sh\nprintf '%s\\n' \"$COZE_WORKSPACE_PATH\" > \"$RESULT_PATH\"\n",
+                "#!/bin/sh\nprintf '%s\\n' \"$APP_WORKSPACE_PATH\" > \"$RESULT_PATH\"\n",
                 encoding="utf-8",
             )
             fake_python.chmod(0o755)
@@ -30,7 +30,7 @@ class HttpRunScriptTests(unittest.TestCase):
                 "PATH": f"{fake_bin}:{os.environ['PATH']}",
                 "RESULT_PATH": str(result_path),
             }
-            environment.pop("COZE_WORKSPACE_PATH", None)
+            environment.pop("APP_WORKSPACE_PATH", None)
             subprocess.run(
                 ["bash", str(script), "-p", "8001"],
                 cwd=temporary_path,

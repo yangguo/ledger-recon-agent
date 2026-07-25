@@ -1,12 +1,9 @@
 #!/bin/bash
 set -eo pipefail
 
-# 初始化目录
-if [ "$COZE_PROJECT_ENV" = "DEV" ]; then
-  if [ ! -d "${COZE_WORKSPACE_PATH}/assets" ]; then
-    mkdir -p "${COZE_WORKSPACE_PATH}/assets"
-  fi
-fi
+# 初始化本地上传目录
+APP_WORKSPACE_PATH="${APP_WORKSPACE_PATH:-$PWD}"
+mkdir -p "${APP_WORKSPACE_PATH}/assets"
 
 # uv 安装依赖
 if [ -n "$PIP_TARGET" ]; then

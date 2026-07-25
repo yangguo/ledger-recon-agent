@@ -70,16 +70,12 @@ class MemoryManager:
 
     def _get_db_url_safe(self) -> Optional[str]:
         """安全获取 db_url，失败时返回 None"""
-        try:
-            from storage.database.db import get_db_url
-            db_url = get_db_url()
-            if db_url and db_url.strip():
-                return db_url
-            logger.warning("db_url is empty, will fallback to MemorySaver")
+        import os
+        db_url = os.getenv("DATABASE_URL", "").strip()
+        if not db_url:
+            logger.warning("DATABASE_URL is not set, will fallback to MemorySaver")
             return None
-        except Exception as e:
-            logger.warning(f"Failed to get db_url: {e}, will fallback to MemorySaver")
-            return None
+        return db_url
 
     def _create_fallback_checkpointer(self) -> MemorySaver:
         """创建内存兜底 checkpointer"""

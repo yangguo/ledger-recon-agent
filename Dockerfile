@@ -16,8 +16,7 @@ COPY src/ ./src/
 COPY config/ ./config/
 COPY scripts/ ./scripts/
 
-ENV COZE_WORKSPACE_PATH=/app
-ENV COZE_PROJECT_TYPE=agent
+ENV APP_WORKSPACE_PATH=/app
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH=/app/src
 

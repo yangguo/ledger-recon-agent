@@ -30,9 +30,9 @@ class LlmProfileTests(unittest.TestCase):
         self.assertEqual(
             build_exports(profile),
             {
-                "COZE_INTEGRATION_MODEL_BASE_URL": "https://llm.example.com/v1",
-                "COZE_INTEGRATION_MODEL": "qwen3.6-27b-q4",
-                "COZE_WORKLOAD_IDENTITY_API_KEY": "${COLAB_LLM_API_KEY}",
+                "LLM_BASE_URL": "https://llm.example.com/v1",
+                "LLM_MODEL": "qwen3.6-27b-q4",
+                "LLM_API_KEY": "${COLAB_LLM_API_KEY}",
             },
         )
 

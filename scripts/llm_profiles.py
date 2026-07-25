@@ -35,9 +35,9 @@ def load_profile(path: Path, name: str) -> dict[str, str]:
 
 def build_exports(profile: dict[str, str]) -> dict[str, str]:
     return {
-        "COZE_INTEGRATION_MODEL_BASE_URL": profile["base_url"].rstrip("/"),
-        "COZE_INTEGRATION_MODEL": profile["model"],
-        "COZE_WORKLOAD_IDENTITY_API_KEY": f"${{{profile['api_key_env']}}}",
+        "LLM_BASE_URL": profile["base_url"].rstrip("/"),
+        "LLM_MODEL": profile["model"],
+        "LLM_API_KEY": f"${{{profile['api_key_env']}}}",
     }
 
 
