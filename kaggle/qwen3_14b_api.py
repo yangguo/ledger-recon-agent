@@ -10,7 +10,8 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from urllib.request import urlopen
+from urllib.error import HTTPError
+from urllib.request import Request, urlopen
 
 
 PORT = 8000
@@ -93,3 +94,52 @@ def wait_for_ngrok_public_base_url(timeout_seconds: int = 60) -> str:
         except (OSError, RuntimeError, json.JSONDecodeError):
             time.sleep(1)
     raise TimeoutError("ngrok did not publish an HTTPS endpoint before the timeout")
+
+
+def run(command: list[str], *, env: dict[str, str] | None = None) -> None:
+    print("+", " ".join(command))
+    subprocess.run(command, check=True, env=env)
+
+
+def main() -> None:
+    from kaggle_secrets import UserSecretsClient
+
+    require_gpu()
+    api_key, ngrok_token, hf_token = load_secrets(UserSecretsClient())
+    run(["git", "clone", "--depth", "1", "https://github.com/ggerganov/llama.cpp.git", "/kaggle/working/llama.cpp"])
+    run(["cmake", "-S", "/kaggle/working/llama.cpp", "-B", "/kaggle/working/llama.cpp/build", "-DGGML_CUDA=ON"])
+    run(["cmake", "--build", "/kaggle/working/llama.cpp/build", "-j", "2", "--target", "llama-server"])
+    run([sys.executable, "-m", "pip", "install", "--quiet", "huggingface_hub"])
+    environment = os.environ.copy()
+    if hf_token:
+        environment["HF_TOKEN"] = hf_token
+    download = "from huggingface_hub import hf_hub_download; print(hf_hub_download(repo_id=%r, filename=%r))" % (MODEL_REPO, MODEL_FILE)
+    model_path = subprocess.check_output([sys.executable, "-c", download], text=True, env=environment).strip().splitlines()[-1]
+    server = subprocess.Popen(build_llama_server_arguments(model_path, api_key, 8192))
+    config = "/kaggle/working/.ngrok.yml"
+    tunnel = None
+    try:
+        deadline = time.monotonic() + 600
+        while time.monotonic() < deadline:
+            try:
+                with urlopen(Request(f"http://127.0.0.1:{PORT}/v1/models", headers={"Authorization": f"Bearer {api_key}"}), timeout=5):
+                    break
+            except OSError:
+                time.sleep(2)
+        else:
+            raise TimeoutError("llama.cpp did not become ready")
+        run(["bash", "-lc", "curl -s https://ngrok-agent.s3.amazonaws.com/ngrok.asc | tee /etc/apt/trusted.gpg.d/ngrok.asc >/dev/null && echo 'deb https://ngrok-agent.s3.amazonaws.com buster main' | tee /etc/apt/sources.list.d/ngrok.list >/dev/null && apt-get update -qq && apt-get install -y ngrok"])
+        subprocess.run(["ngrok", "config", "add-authtoken", ngrok_token, "--config", config], check=True, stdout=subprocess.DEVNULL)
+        tunnel = subprocess.Popen(build_ngrok_arguments("ngrok") + ["--config", config])
+        print("Service is live. Set these values in local .env:")
+        print(render_local_env_profile(wait_for_ngrok_public_base_url(), api_key))
+        tunnel.wait()
+    finally:
+        if tunnel and tunnel.poll() is None:
+            tunnel.terminate()
+        server.terminate()
+        Path(config).unlink(missing_ok=True)
+
+
+if __name__ == "__main__":
+    main()

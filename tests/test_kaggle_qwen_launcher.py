@@ -39,6 +39,25 @@ class KaggleQwenLauncherTests(unittest.TestCase):
         self.assertIn("LLM_BASE_URL=https://demo.ngrok.app/v1", profile)
         self.assertNotIn("super-secret", profile)
 
+    def test_extract_ngrok_url_prefers_https_tunnel(self):
+        from kaggle.qwen3_14b_api import extract_ngrok_public_base_url
+
+        self.assertEqual(
+            extract_ngrok_public_base_url({"tunnels": [{"public_url": "https://demo.ngrok.app"}]}),
+            "https://demo.ngrok.app/v1",
+        )
+
+    def test_missing_required_secret_has_safe_error(self):
+        from kaggle.qwen3_14b_api import load_secrets
+
+        class Secrets:
+            def get_secret(self, name):
+                return {"LLM_API_KEY": "secret", "NGROK_AUTHTOKEN": ""}[name]
+
+        with self.assertRaisesRegex(RuntimeError, "NGROK_AUTHTOKEN") as error:
+            load_secrets(Secrets())
+        self.assertNotIn("secret", str(error.exception))
+
 
 if __name__ == "__main__":
     unittest.main()
