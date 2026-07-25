@@ -22,6 +22,8 @@
 
 ```text
 config/agent_llm_config.json      # LLM 参数和 Agent system prompt
+config/llm_profiles.example.json  # 可切换的 OpenAI-compatible endpoint 示例
+colab/qwen36_27b_api.py           # Qwen3.6-27B Colab API 启动器
 src/main.py                       # FastAPI 服务入口和本地运行入口
 src/agents/agent.py               # 构建 LangGraph/LangChain Agent
 src/tools/reconciliation_tool.py  # JE/TB 加载与对账核心逻辑
@@ -71,11 +73,63 @@ set +a
 | `COZE_WORKSPACE_PATH` | 是 | 工作空间根目录，本地设置为仓库路径 |
 | `COZE_WORKLOAD_IDENTITY_API_KEY` | 是 | LLM API key |
 | `COZE_INTEGRATION_MODEL_BASE_URL` | 是 | LLM OpenAI-compatible base URL |
+| `COZE_INTEGRATION_MODEL` | 否 | 覆盖 `agent_llm_config.json` 中的模型名，切换 endpoint 时使用 |
 | `PGDATABASE_URL` | 否 | Postgres checkpoint 存储；未配置时退化为内存存储 |
 | `COZE_BUCKET_ENDPOINT_URL` | 否 | S3 兼容存储 endpoint |
 | `COZE_BUCKET_NAME` | 否 | S3 bucket 名称 |
 
 完整示例见 `.env.example`。
+
+## Google Colab：Qwen3.6-27B 远程 API
+
+此仓库提供 `colab/qwen36_27b_api.py`，在 Colab 上将量化的
+`Qwen3.6-27B-Q4_K_M.gguf` 作为 OpenAI-compatible API 对外提供。该量化文件约
+16.8 GB；请使用至少 20 GB 可用显存的 L4 或 A100 runtime。免费 T4（16 GB）不足，
+而且 Colab runtime 会断开或重置，因此这不是持久化部署方案。
+
+1. 在 Cloudflare Zero Trust 的 **Networks > Tunnels** 创建 Named Tunnel，并添加
+   public hostname，例如 `llm.example.com`，service 填 `http://127.0.0.1:8000`。
+   在 tunnel 页面复制 token。不要使用 Quick Tunnel：它不支持 SSE，无法转发本项目
+   的流式模型响应。
+2. 在 Colab 选择 GPU runtime，上传 `colab/qwen36_27b_api.py` 并运行：
+
+   ```bash
+   !python qwen36_27b_api.py
+   ```
+
+   根据提示输入 `https://llm.example.com/v1`、Cloudflare tunnel token 和一个新建的
+   高强度 API key。token 与 key 只保留在当前 Colab runtime 内存，不会写入仓库或
+   notebook 输出。
+3. 在本机保存 profile（该文件包含 endpoint，但不要写入 API key）：
+
+   ```bash
+   cp config/llm_profiles.example.json config/llm_profiles.json
+   # 将 profiles.colab-qwen36.base_url 改为 Colab 输出的 HTTPS /v1 地址
+   export COLAB_LLM_API_KEY='替换为你在 Colab 输入的 API key'
+   source <(uv run python scripts/llm_profiles.py --profile colab-qwen36)
+   ```
+
+   之后正常启动本项目即可；`COZE_INTEGRATION_MODEL` 会把模型切换为
+   `qwen3.6-27b-q4_k_m`。恢复原提供商时，设置对应 provider 的 key 后运行：
+
+   ```bash
+   source <(uv run python scripts/llm_profiles.py --profile existing-provider)
+   ```
+
+4. 在本机确认连通性。API key 请只从 shell 环境变量读取：
+
+   ```bash
+   curl --fail-with-body "$COZE_INTEGRATION_MODEL_BASE_URL/models" \
+     -H "Authorization: Bearer $COLAB_LLM_API_KEY"
+
+   curl -N --fail-with-body "$COZE_INTEGRATION_MODEL_BASE_URL/chat/completions" \
+     -H "Authorization: Bearer $COLAB_LLM_API_KEY" \
+     -H 'Content-Type: application/json' \
+     -d '{"model":"qwen3.6-27b-q4_k_m","messages":[{"role":"user","content":"Reply with OK."}],"stream":true}'
+   ```
+
+保持 Colab cell 运行才能提供服务；停止 cell、runtime 休眠或 tunnel token 被撤销都会使
+远程 API 不可用。完成后在 Colab 中中断运行，并可在 Cloudflare 删除 tunnel token。
 
 ## 运行
 
