@@ -94,6 +94,16 @@ class ColabQwenLauncherTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "HTTPS"):
             extract_ngrok_public_base_url({"tunnels": []})
 
+    def test_local_env_profile_uses_v1_url_without_exposing_api_key(self):
+        from colab.qwen36_27b_api import render_local_env_profile
+
+        profile = render_local_env_profile("https://demo.trycloudflare.com", "super-secret-key")
+
+        self.assertIn("LLM_BASE_URL=https://demo.trycloudflare.com/v1", profile)
+        self.assertIn("LLM_MODEL=qwen3.6-27b-q4_k_m", profile)
+        self.assertIn("LLM_API_KEY=<the API key entered above>", profile)
+        self.assertNotIn("super-secret-key", profile)
+
 
 if __name__ == "__main__":
     unittest.main()

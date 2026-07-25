@@ -242,6 +242,15 @@ def extract_ngrok_public_base_url(payload: object) -> str:
     raise RuntimeError("ngrok did not expose an HTTPS tunnel")
 
 
+def render_local_env_profile(tunnel_url: str, _api_key: str) -> str:
+    """Render copyable local settings without ever echoing the secret API key."""
+    return "\n".join([
+        f"LLM_BASE_URL={public_base_url(tunnel_url)}",
+        f"LLM_MODEL={SERVED_MODEL_NAME}",
+        "LLM_API_KEY=<the API key entered above>",
+    ])
+
+
 def wait_for_ngrok_public_base_url(timeout_seconds: int = 60) -> str:
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
@@ -333,9 +342,7 @@ def main() -> None:
         if public_url is None:
             raise RuntimeError("Tunnel did not provide a public URL")
         print("\nService is live. Set these values in your local .env:")
-        print(f"LLM_BASE_URL={public_url}")
-        print(f"LLM_MODEL={SERVED_MODEL_NAME}")
-        print("LLM_API_KEY=<the API key entered above>")
+        print(render_local_env_profile(public_url, api_key))
         print("\nKeep this Colab cell running. Interrupt it to stop both the API and tunnel.")
         tunnel.wait()
     finally:
