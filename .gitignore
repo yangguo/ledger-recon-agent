@@ -55,6 +55,7 @@ tests/fixtures/local/
 # Claude Code
 .claude/
 .worktrees/
+config/llm_profiles.json
 
 # Frontend dependencies
 frontend/node_modules/

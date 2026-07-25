@@ -1,0 +1,14 @@
+{
+  "profiles": {
+    "existing-provider": {
+      "base_url": "https://example-provider.example/v1",
+      "model": "your-existing-model",
+      "api_key_env": "THIRD_PARTY_LLM_API_KEY"
+    },
+    "colab-qwen36": {
+      "base_url": "https://llm.example.com/v1",
+      "model": "qwen3.6-27b-q4_k_m",
+      "api_key_env": "COLAB_LLM_API_KEY"
+    }
+  }
+}

@@ -11,8 +11,7 @@ import os
 import tempfile
 from typing import List, Dict, Optional, Tuple, Any, Iterator, Generator
 from langchain.tools import tool
-from coze_coding_utils.log.write_log import request_context
-from coze_coding_utils.runtime_ctx.context import new_context
+from config import workspace_path
 
 # 默认配置
 DEFAULT_THRESHOLD = 0.01
@@ -41,8 +40,7 @@ def _normalize_input_path(path_value: Any) -> str:
     s = s.replace("\\", os.sep)
     if os.path.isabs(s):
         return os.path.normpath(s)
-    workspace_path = os.getenv("COZE_WORKSPACE_PATH") or os.getcwd()
-    return os.path.normpath(os.path.join(workspace_path, s))
+    return os.path.normpath(os.path.join(workspace_path(), s))
 
 
 JE_COLUMNS = {
@@ -459,8 +457,6 @@ def load_je_data(je_file_paths: str) -> str:
     Returns:
         返回加载结果的JSON字符串，包含成功加载的文件数和数据行数
     """
-    ctx = request_context.get() or new_context(method="load_je_data")
-    
     try:
         file_list = [_normalize_input_path(f.strip()) for f in je_file_paths.split(',') if f.strip()]
         
@@ -541,8 +537,6 @@ def load_tb_data(tb_file_path: str) -> str:
     Returns:
         返回加载结果的JSON字符串，包含数据行数和列信息
     """
-    ctx = request_context.get() or new_context(method="load_tb_data")
-    
     try:
         tb_file_path = _normalize_input_path(tb_file_path)
         if not os.path.exists(tb_file_path):
@@ -708,8 +702,6 @@ def run_reconciliation(
     Returns:
         返回对账结果的JSON字符串，包含差异明细和统计信息
     """
-    ctx = request_context.get() or new_context(method="run_reconciliation")
-    
     try:
         file_list = [_normalize_input_path(f.strip()) for f in je_file_paths.split(',') if f.strip()]
         tb_file_path = _normalize_input_path(tb_file_path)

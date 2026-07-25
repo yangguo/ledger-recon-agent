@@ -3,7 +3,9 @@
 set -e
 # 导出环境变量
 
-WORK_DIR="${COZE_WORKSPACE_PATH:-.}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+WORK_DIR="${APP_WORKSPACE_PATH:-$(dirname "$SCRIPT_DIR")}"
+export APP_WORKSPACE_PATH="$WORK_DIR"
 PORT=8000
 
 usage() {
@@ -32,4 +34,4 @@ if [ -f "${WORK_DIR}/.venv/bin/activate" ]; then
   source "${WORK_DIR}/.venv/bin/activate"
 fi
 
-python ${WORK_DIR}/src/main.py -m http -p $PORT
+python ${WORK_DIR}/src/main.py --host 127.0.0.1 --port $PORT
