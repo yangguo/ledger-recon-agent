@@ -171,6 +171,7 @@ Kaggle 常见 16 GB GPU 无法稳定运行本项目的 Qwen3.6-27B；`kaggle/qwe
    - `LLM_API_KEY`：新的 llama.cpp API key
    - `NGROK_AUTHTOKEN`：ngrok Dashboard 的 authtoken
    - `HF_TOKEN`：可选；公开模型下载可留空
+   - `MODEL_SIZE`：可选；默认 `14B`。仅在实际获得 T4 × 2（或更高）时设为 `27B`。
 
 3. 本机准备并推送私有 GPU Notebook。将 `vyang/qwen3-14b-api` 换为自己的 `用户名/slug`：
 
@@ -180,6 +181,10 @@ Kaggle 常见 16 GB GPU 无法稳定运行本项目的 Qwen3.6-27B；`kaggle/qwe
 
    CLI 只生成 `kernel-metadata.json`、Notebook 和启动器，不会写入或上传密钥。它默认请求
    `NvidiaTeslaP100`；若你的账号有更高显存资源，可传入 `--accelerator NvidiaL4`。
+
+   对 Qwen3.6-27B Q4_K_M，Notebook 必须在 `nvidia-smi` 中显示至少两张 GPU、每张至少
+   12 GiB 空闲且合计至少 28 GiB；启动器会以 `--split-mode layer --tensor-split 1,1` 分片。
+   若 8K context OOM，请将启动器 context 改为 4096 后再试。
 
 4. 观察运行状态与 Notebook 日志；日志中的 `LLM_BASE_URL` 是当次运行的公网地址：
 

@@ -66,6 +66,25 @@ class KaggleQwenLauncherTests(unittest.TestCase):
         with patch("kaggle.qwen3_14b_api.urlopen", side_effect=HTTPError("url", 401, "Unauthorized", {}, None)):
             require_authentication()
 
+    def test_27b_config_uses_qwen36_gguf_and_requires_two_gpus(self):
+        from kaggle.qwen3_14b_api import model_config, require_model_vram
+
+        config = model_config("27B")
+
+        self.assertEqual(config["repo"], "unsloth/Qwen3.6-27B-GGUF")
+        self.assertEqual(config["file"], "Qwen3.6-27B-Q4_K_M.gguf")
+        with self.assertRaisesRegex(RuntimeError, "two GPUs"):
+            require_model_vram(config, [30_000])
+        require_model_vram(config, [14_000, 14_000])
+
+    def test_27b_server_arguments_use_equal_layer_split(self):
+        from kaggle.qwen3_14b_api import build_llama_server_arguments
+
+        arguments = build_llama_server_arguments("/kaggle/model.gguf", "key", 8192, model_size="27B")
+
+        self.assertEqual(arguments[arguments.index("--split-mode") + 1], "layer")
+        self.assertEqual(arguments[arguments.index("--tensor-split") + 1], "1,1")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -19,15 +19,35 @@ MODEL_REPO = "Qwen/Qwen3-14B-GGUF"
 MODEL_FILE = "Qwen3-14B-Q4_K_M.gguf"
 SERVED_MODEL_NAME = "qwen3-14b-q4_k_m"
 MINIMUM_FREE_VRAM_MIB = 14_000
+QWEN36_27B = {"repo": "unsloth/Qwen3.6-27B-GGUF", "file": "Qwen3.6-27B-Q4_K_M.gguf", "model": "qwen3.6-27b-q4_k_m"}
 
 
-def build_llama_server_arguments(model_path: str, api_key: str, context_size: int) -> list[str]:
-    return [
+def model_config(model_size: str) -> dict[str, str]:
+    if model_size == "14B":
+        return {"repo": MODEL_REPO, "file": MODEL_FILE, "model": SERVED_MODEL_NAME}
+    if model_size == "27B":
+        return QWEN36_27B
+    raise ValueError("MODEL_SIZE must be 14B or 27B")
+
+
+def require_model_vram(config: dict[str, str], free_vram: list[int]) -> None:
+    if config is QWEN36_27B:
+        if len(free_vram) < 2 or min(free_vram[:2]) < 12_000 or sum(free_vram) < 28_000:
+            raise RuntimeError("Qwen3.6-27B requires two GPUs with at least 12 GiB free each (28 GiB total)")
+    elif max(free_vram, default=0) < MINIMUM_FREE_VRAM_MIB:
+        raise RuntimeError("Qwen3-14B Q4 needs at least 14 GiB free VRAM")
+
+
+def build_llama_server_arguments(model_path: str, api_key: str, context_size: int, model_size: str = "14B") -> list[str]:
+    arguments = [
         "/kaggle/working/llama.cpp/build/bin/llama-server", "--model", model_path,
         "--host", "127.0.0.1", "--port", str(PORT), "--alias", SERVED_MODEL_NAME,
         "--api-key", api_key, "--ctx-size", str(context_size), "--n-gpu-layers", "999",
         "--flash-attn", "on",
     ]
+    if model_size == "27B":
+        arguments += ["--split-mode", "layer", "--tensor-split", "1,1"]
+    return arguments
 
 
 def build_ngrok_arguments(binary: str) -> list[str]:
@@ -41,10 +61,10 @@ def public_base_url(value: str) -> str:
     return value if value.endswith("/v1") else f"{value}/v1"
 
 
-def render_local_env_profile(tunnel_url: str, _api_key: str) -> str:
+def render_local_env_profile(tunnel_url: str, _api_key: str, model: str = SERVED_MODEL_NAME) -> str:
     return "\n".join([
         f"LLM_BASE_URL={public_base_url(tunnel_url)}",
-        f"LLM_MODEL={SERVED_MODEL_NAME}",
+        f"LLM_MODEL={model}",
         "LLM_API_KEY=<the Kaggle Secret value>",
     ])
 
@@ -67,6 +87,11 @@ def free_vram_mib() -> int:
         ["nvidia-smi", "--query-gpu=memory.free", "--format=csv,noheader,nounits"], text=True
     )
     return max(int(value.strip()) for value in output.splitlines() if value.strip())
+
+
+def free_vram_values() -> list[int]:
+    output = subprocess.check_output(["nvidia-smi", "--query-gpu=memory.free", "--format=csv,noheader,nounits"], text=True)
+    return [int(value.strip()) for value in output.splitlines() if value.strip()]
 
 
 def require_gpu() -> None:
@@ -114,7 +139,14 @@ def main() -> None:
     from kaggle_secrets import UserSecretsClient
 
     require_gpu()
-    api_key, ngrok_token, hf_token = load_secrets(UserSecretsClient())
+    secrets = UserSecretsClient()
+    api_key, ngrok_token, hf_token = load_secrets(secrets)
+    try:
+        size = secrets.get_secret("MODEL_SIZE") or "14B"
+    except Exception:
+        size = "14B"
+    config_model = model_config(size)
+    require_model_vram(config_model, free_vram_values())
     run(["git", "clone", "--depth", "1", "https://github.com/ggerganov/llama.cpp.git", "/kaggle/working/llama.cpp"])
     run(["cmake", "-S", "/kaggle/working/llama.cpp", "-B", "/kaggle/working/llama.cpp/build", "-DGGML_CUDA=ON"])
     run(["cmake", "--build", "/kaggle/working/llama.cpp/build", "-j", "2", "--target", "llama-server"])
@@ -122,9 +154,9 @@ def main() -> None:
     environment = os.environ.copy()
     if hf_token:
         environment["HF_TOKEN"] = hf_token
-    download = "from huggingface_hub import hf_hub_download; print(hf_hub_download(repo_id=%r, filename=%r))" % (MODEL_REPO, MODEL_FILE)
+    download = "from huggingface_hub import hf_hub_download; print(hf_hub_download(repo_id=%r, filename=%r))" % (config_model["repo"], config_model["file"])
     model_path = subprocess.check_output([sys.executable, "-c", download], text=True, env=environment).strip().splitlines()[-1]
-    server = subprocess.Popen(build_llama_server_arguments(model_path, api_key, 8192))
+    server = subprocess.Popen(build_llama_server_arguments(model_path, api_key, 8192, model_size=size))
     config = "/kaggle/working/.ngrok.yml"
     tunnel = None
     try:
@@ -142,7 +174,7 @@ def main() -> None:
         subprocess.run(["ngrok", "config", "add-authtoken", ngrok_token, "--config", config], check=True, stdout=subprocess.DEVNULL)
         tunnel = subprocess.Popen(build_ngrok_arguments("ngrok") + ["--config", config])
         print("Service is live. Set these values in local .env:")
-        print(render_local_env_profile(wait_for_ngrok_public_base_url(), api_key))
+        print(render_local_env_profile(wait_for_ngrok_public_base_url(), api_key, config_model["model"]))
         tunnel.wait()
     finally:
         if tunnel and tunnel.poll() is None:
