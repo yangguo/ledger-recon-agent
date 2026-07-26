@@ -1,9 +1,38 @@
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import patch
 from urllib.error import HTTPError
 
 
 class KaggleQwenLauncherTests(unittest.TestCase):
+    def test_cuda_driver_shim_registers_missing_driver_target(self):
+        from kaggle.qwen3_14b_api import write_cuda_driver_shim
+
+        with TemporaryDirectory() as directory:
+            shim = write_cuda_driver_shim(Path(directory) / "cuda-driver-shim.cmake")
+
+            contents = shim.read_text()
+        self.assertIn("if (NOT TARGET CUDA::cuda_driver)", contents)
+        self.assertIn("find_library(CUDA_DRIVER_LIBRARY", contents)
+        self.assertIn("/usr/lib/x86_64-linux-gnu", contents)
+        self.assertIn("add_library(CUDA::cuda_driver UNKNOWN IMPORTED)", contents)
+
+    def test_cmake_configure_arguments_load_cuda_driver_shim(self):
+        from kaggle.qwen3_14b_api import build_cmake_configure_arguments
+
+        arguments = build_cmake_configure_arguments(
+            "/kaggle/working/llama.cpp",
+            "/kaggle/working/llama.cpp/build",
+            "/kaggle/working/cuda-driver-shim.cmake",
+        )
+
+        self.assertIn("-DGGML_CUDA=ON", arguments)
+        self.assertIn(
+            "-DCMAKE_PROJECT_TOP_LEVEL_INCLUDES=/kaggle/working/cuda-driver-shim.cmake",
+            arguments,
+        )
+
     def test_model_constants_select_official_qwen3_14b_q4(self):
         from kaggle.qwen3_14b_api import MINIMUM_FREE_VRAM_MIB, MODEL_FILE, MODEL_REPO
 

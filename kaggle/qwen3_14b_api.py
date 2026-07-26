@@ -22,6 +22,33 @@ MINIMUM_FREE_VRAM_MIB = 14_000
 QWEN36_27B = {"repo": "unsloth/Qwen3.6-27B-GGUF", "file": "Qwen3.6-27B-Q4_K_M.gguf", "model": "qwen3.6-27b-q4_k_m"}
 
 
+def write_cuda_driver_shim(path: Path) -> Path:
+    """Supply CMake's missing CUDA driver target in Kaggle's CUDA image."""
+    path.write_text(
+        """if (NOT TARGET CUDA::cuda_driver)
+  find_library(CUDA_DRIVER_LIBRARY NAMES cuda
+    PATHS /usr/lib/x86_64-linux-gnu /usr/lib/wsl/lib)
+  if (NOT CUDA_DRIVER_LIBRARY)
+    message(FATAL_ERROR \"Kaggle CUDA driver library libcuda.so was not found\")
+  endif()
+  add_library(CUDA::cuda_driver UNKNOWN IMPORTED)
+  set_target_properties(CUDA::cuda_driver PROPERTIES
+    IMPORTED_LOCATION \"${CUDA_DRIVER_LIBRARY}\")
+endif()
+""",
+        encoding="utf-8",
+    )
+    return path
+
+
+def build_cmake_configure_arguments(source_directory: str, build_directory: str, shim_path: str) -> list[str]:
+    return [
+        "cmake", "-S", source_directory, "-B", build_directory,
+        "-DGGML_CUDA=ON",
+        f"-DCMAKE_PROJECT_TOP_LEVEL_INCLUDES={shim_path}",
+    ]
+
+
 def model_config(model_size: str) -> dict[str, str]:
     if model_size == "14B":
         return {"repo": MODEL_REPO, "file": MODEL_FILE, "model": SERVED_MODEL_NAME}
@@ -147,8 +174,11 @@ def main() -> None:
         size = "14B"
     config_model = model_config(size)
     require_model_vram(config_model, free_vram_values())
-    run(["git", "clone", "--depth", "1", "https://github.com/ggerganov/llama.cpp.git", "/kaggle/working/llama.cpp"])
-    run(["cmake", "-S", "/kaggle/working/llama.cpp", "-B", "/kaggle/working/llama.cpp/build", "-DGGML_CUDA=ON"])
+    llama_directory = "/kaggle/working/llama.cpp"
+    build_directory = f"{llama_directory}/build"
+    shim_path = write_cuda_driver_shim(Path("/kaggle/working/cuda-driver-shim.cmake"))
+    run(["git", "clone", "--depth", "1", "https://github.com/ggerganov/llama.cpp.git", llama_directory])
+    run(build_cmake_configure_arguments(llama_directory, build_directory, str(shim_path)))
     run(["cmake", "--build", "/kaggle/working/llama.cpp/build", "-j", "2", "--target", "llama-server"])
     run([sys.executable, "-m", "pip", "install", "--quiet", "huggingface_hub"])
     environment = os.environ.copy()
