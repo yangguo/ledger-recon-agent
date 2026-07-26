@@ -113,6 +113,7 @@ class KaggleQwenLauncherTests(unittest.TestCase):
 
         arguments = build_llama_server_arguments("/kaggle/model.gguf", "key", 8192, model_size="27B")
 
+        self.assertEqual(arguments[arguments.index("--alias") + 1], "qwen3.6-27b-q4_k_m")
         self.assertEqual(arguments[arguments.index("--split-mode") + 1], "layer")
         self.assertEqual(arguments[arguments.index("--tensor-split") + 1], "1,1")
 

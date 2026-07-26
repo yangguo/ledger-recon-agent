@@ -68,9 +68,10 @@ def require_model_vram(config: dict[str, str], free_vram: list[int]) -> None:
 
 
 def build_llama_server_arguments(model_path: str, api_key: str, context_size: int, model_size: str = "14B") -> list[str]:
+    served_model_name = model_config(model_size)["model"]
     arguments = [
         "/kaggle/working/llama.cpp/build/bin/llama-server", "--model", model_path,
-        "--host", "127.0.0.1", "--port", str(PORT), "--alias", SERVED_MODEL_NAME,
+        "--host", "127.0.0.1", "--port", str(PORT), "--alias", served_model_name,
         "--api-key", api_key, "--ctx-size", str(context_size), "--n-gpu-layers", "999",
         "--flash-attn", "on",
     ]
