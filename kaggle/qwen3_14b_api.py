@@ -26,8 +26,10 @@ def write_cuda_driver_shim(path: Path) -> Path:
     """Supply CMake's missing CUDA driver target in Kaggle's CUDA image."""
     path.write_text(
         """if (NOT TARGET CUDA::cuda_driver)
+  file(GLOB CUDA_COMPAT_DIRS "/usr/local/cuda-*/compat")
   find_library(CUDA_DRIVER_LIBRARY NAMES cuda cuda.so.1
-    PATHS /usr/lib/x86_64-linux-gnu /usr/lib/wsl/lib)
+    PATHS ${CUDA_COMPAT_DIRS} /usr/local/cuda/compat
+          /usr/lib/x86_64-linux-gnu /usr/lib/wsl/lib)
   if (NOT CUDA_DRIVER_LIBRARY)
     message(FATAL_ERROR \"Kaggle CUDA driver library libcuda.so was not found\")
   endif()
