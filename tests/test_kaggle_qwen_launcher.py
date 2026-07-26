@@ -14,7 +14,7 @@ class KaggleQwenLauncherTests(unittest.TestCase):
 
             contents = shim.read_text()
         self.assertIn("if (NOT TARGET CUDA::cuda_driver)", contents)
-        self.assertIn("find_library(CUDA_DRIVER_LIBRARY", contents)
+        self.assertIn("find_library(CUDA_DRIVER_LIBRARY NAMES cuda cuda.so.1", contents)
         self.assertIn("/usr/lib/x86_64-linux-gnu", contents)
         self.assertIn("add_library(CUDA::cuda_driver UNKNOWN IMPORTED)", contents)
 
