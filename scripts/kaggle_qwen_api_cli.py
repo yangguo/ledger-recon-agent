@@ -11,8 +11,9 @@ from pathlib import Path
 
 
 def build_metadata(kernel: str) -> dict[str, object]:
+    slug = kernel.rsplit("/", 1)[-1]
     return {
-        "id": kernel, "title": "Qwen3 14B temporary API", "code_file": "api.ipynb",
+        "id": kernel, "title": slug, "code_file": "api.ipynb",
         "language": "python", "kernel_type": "notebook", "is_private": True,
         "enable_gpu": True, "enable_internet": True, "dataset_sources": [],
         "competition_sources": [], "kernel_sources": [], "model_sources": [],
@@ -26,8 +27,13 @@ def build_commands(path: Path, kernel: str, accelerator: str) -> list[list[str]]
 def prepare(path: Path, kernel: str) -> None:
     root = Path(__file__).resolve().parents[1]
     path.mkdir(parents=True, exist_ok=True)
-    for name in ("api.ipynb", "qwen3_14b_api.py"):
-        shutil.copy2(root / "kaggle" / name, path / name)
+    launcher = (root / "kaggle" / "qwen3_14b_api.py").read_text(encoding="utf-8")
+    notebook = {
+        "cells": [{"cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [], "source": [f"exec({launcher!r})\n"]}],
+        "metadata": {"kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"}, "language_info": {"name": "python"}},
+        "nbformat": 4, "nbformat_minor": 5,
+    }
+    (path / "api.ipynb").write_text(json.dumps(notebook), encoding="utf-8")
     (path / "kernel-metadata.json").write_text(json.dumps(build_metadata(kernel), indent=2) + "\n", encoding="utf-8")
 
 

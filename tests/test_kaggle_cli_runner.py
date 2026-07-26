@@ -22,6 +22,16 @@ class KaggleCliRunnerTests(unittest.TestCase):
         self.assertEqual(metadata["code_file"], "api.ipynb")
         self.assertNotIn("NGROK_AUTHTOKEN", str(metadata))
 
+    def test_prepared_notebook_embeds_launcher_source(self):
+        from scripts.kaggle_qwen_api_cli import prepare
+        import json
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as directory:
+            prepare(Path(directory), "yf2000/qwen36-27b-t4x2-api")
+            notebook = json.loads((Path(directory) / "api.ipynb").read_text())
+        self.assertIn("exec(", "".join(notebook["cells"][0]["source"]))
+
 
 if __name__ == "__main__":
     unittest.main()
